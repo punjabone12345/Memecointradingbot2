@@ -58,6 +58,7 @@ export interface BuyerActivity {
   detectedAt: number;   // Date.now() when the bot processed the tx — used for display
   txSig: string;
   priceAtDetection: number;
+  txType?: 'buy' | 'sell';
 }
 
 
@@ -1498,7 +1499,7 @@ async function handleVolumeUpdate(
   const detectedAt = Date.now();
   // Dedup: replays re-enter this function with the same txSig — don't double-record in buyerActivity.
   if (!tok.buyerActivity.some(b => b.txSig === txSig)) {
-    tok.buyerActivity.push({ wallet, amountUsd: txUsd, timestamp: txTimestamp, detectedAt, txSig, priceAtDetection });
+    tok.buyerActivity.push({ wallet, amountUsd: txUsd, timestamp: txTimestamp, detectedAt, txSig, priceAtDetection, txType });
   }
 
   // Score every transaction through GMGN. Sells are observational only, but

@@ -46,7 +46,7 @@ export interface WalletScoreBreakdown {
     roi: number;
     holdTime: number;
   };
-  scoreSource: 'gmgn' | 'cache' | 'unavailable' | 'rate_limited';
+  scoreSource: 'gmgn' | 'gmgn_public' | 'cache' | 'unavailable' | 'rate_limited';
   scoreStatus: 'scored' | 'unavailable' | 'rate_limited';
   computedAt: number;
   /** True when this zero score was caused by an active rate-limit ban (not a real score). */
