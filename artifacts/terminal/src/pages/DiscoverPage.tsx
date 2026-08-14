@@ -567,8 +567,6 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
         </div>
       </div>
 
-      )}
-
       {/* ── Tracked Tokens ── */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ ...C.label, marginBottom: 8 }}>
@@ -588,31 +586,6 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
             .map(tok => <TrackedCard key={tok.mint} tok={tok} tick={tick} />)
         )}
       </div>
-
-      {/* ── Wallet Signal Feed ── */}
-      <div style={{ ...C.card, marginBottom: 16 }}>
-        <div style={{ ...C.label, marginBottom: 2 }}>🧠 SMART WALLET SIGNAL FEED</div>
-        <div style={{ fontSize: 9, color: '#2a3a50', marginBottom: 10 }}>
-          Every buyer on a tracked token is scored via GMGN — entry fires only on Consensus: two+ wallets ≥80 within 5 min (Tier 2 · 1% risk · price &lt; $0.001)
-        </div>
-        {!gmgnConfigured && (
-          <div style={{ fontSize: 10, color: C.accent, padding: '6px 10px', marginBottom: 8, borderRadius: 6, background: 'rgba(0,191,255,0.08)', border: '1px solid rgba(0,191,255,0.2)' }}>
-            ℹ️ Running on GMGN public quotation API (add GMGN_API_KEY for higher throughput limits)
-          </div>
-        )}
-        {gmgnBannedUntil > 0 && (
-          <div style={{ fontSize: 10, color: C.yellow, padding: '6px 10px', marginBottom: 8, borderRadius: 6, background: 'rgba(255,200,0,0.08)', border: '1px solid rgba(255,200,0,0.2)' }}>
-            ⏳ GMGN rate-limited — scoring paused until {new Date(gmgnBannedUntil).toLocaleTimeString()}
-          </div>
-        )}
-        {buyLogs.length === 0 ? (
-          <div style={{ fontSize: 11, color: C.gray, textAlign: 'center', padding: '16px 0' }}>No buyer wallets scored yet</div>
-        ) : (
-          buyLogs.map((log: BuyerActivityLog, i: number) => <BuyerActivityRow key={i} entry={log} />)
-        )}
-      </div>
-
-      <TransactionAuditPanel since={status?.serverStartMs} />
 
       {/* ── Migration tracker feed ── */}
       <MigrationFeed />
