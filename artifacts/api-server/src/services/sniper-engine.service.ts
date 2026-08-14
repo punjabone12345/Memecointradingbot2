@@ -1243,11 +1243,11 @@ async function enterSniperPosition(
           { mint: mint.slice(0, 12), symbol, finalSlipPct: finalSlipPct.toFixed(1), maxSlippage },
           'Sniper engine: post-delay slippage exceeded — skipped',
         );
-        notifySniperSkip({
-          name, symbol, mint, buyAmountUsd: triggerAmountUsd,
-          reason: `Slippage ${finalSlipPct.toFixed(1)}% > ${maxSlippage}% max`,
-          entryPrice: finalEntryPrice, priceAtBuyDetection: priceAtDetection, maxSlippagePct: maxSlippage,
-        }).catch(() => {});
+        // notifySniperSkip({
+        //   name, symbol, mint, buyAmountUsd: triggerAmountUsd,
+        //   reason: `Slippage ${finalSlipPct.toFixed(1)}% > ${maxSlippage}% max`,
+        //   entryPrice: finalEntryPrice, priceAtBuyDetection: priceAtDetection, maxSlippagePct: maxSlippage,
+        // }).catch(() => {});
         // Permanently block this mint — it already pumped past our threshold
         // before we could enter; future buyer buys on the same token would face
         // the same or worse slippage so we never attempt it again.
@@ -2382,12 +2382,12 @@ async function activateTrackingNow(mint: string): Promise<void> {
     if (!rc.ok) {
       tok.status = 'REJECTED';
       void diagTokenRejected(mint, 'RugCheck failed: high risk / creator insider / freeze authority').catch(() => {});
-      void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: false });
+      // void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: false });
       logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token failed RugCheck safety filters');
     } else {
       tok.status = 'TRACKING';
       void diagTokenValidationMilestone(mint, 'passed_rugcheck_at', Date.now()).catch(() => {});
-      void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: true });
+      // void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: true });
       logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token passed RugCheck safety filters');
     }
     broadcastSniperStatus();
@@ -2957,7 +2957,7 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
         void diagTokenExpired(tok.mint).catch(() => {});
         if (!tok.expiredNotified) {
           tok.expiredNotified = true;
-          void notifyTrackingExpired({ symbol: tok.symbol });
+          // void notifyTrackingExpired({ symbol: tok.symbol });
         }
         logger.info({ mint: tok.mint.slice(0, 12), symbol: tok.symbol }, 'Sniper engine: tracking expired (2-hour limit reached)');
         broadcastSniperStatus();
@@ -2989,13 +2989,13 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
 
         if (!tok.thresholdsNotified) {
           tok.thresholdsNotified = true;
-          void notifyThresholdsReached({
-            symbol: tok.symbol,
-            mc: currentMc,
-            liquidity: currentLiq,
-            elapsedMs: trackingAgeMs,
-            maxTrackingMs,
-          });
+          // void notifyThresholdsReached({
+          //   symbol: tok.symbol,
+          //   mc: currentMc,
+          //   liquidity: currentLiq,
+          //   elapsedMs: trackingAgeMs,
+          //   maxTrackingMs,
+          // });
         }
         logger.info(
           { mint: tok.mint.slice(0, 12), symbol: tok.symbol, mc: currentMc.toFixed(0), liq: currentLiq.toFixed(0), attempt: tok.sustainAttempts },
@@ -3010,11 +3010,11 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
           tok.status = 'TRADE_ELIGIBLE';
           if (!tok.completedNotified) {
             tok.completedNotified = true;
-            void notifySustainCompleted({
-              symbol: tok.symbol,
-              mc: currentMc,
-              liquidity: currentLiq,
-            });
+            // void notifySustainCompleted({
+            //   symbol: tok.symbol,
+            //   mc: currentMc,
+            //   liquidity: currentLiq,
+            // });
           }
           logger.info(
             { mint: tok.mint.slice(0, 12), symbol: tok.symbol },
@@ -3063,12 +3063,12 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
 
         if (!tok.resetNotified) {
           tok.resetNotified = true;
-          void notifySustainReset({
-            symbol: tok.symbol,
-            reason: failureReason,
-            mc: currentMc,
-            liquidity: currentLiq,
-          });
+          // void notifySustainReset({
+          //   symbol: tok.symbol,
+          //   reason: failureReason,
+          //   mc: currentMc,
+          //   liquidity: currentLiq,
+          // });
         }
         logger.info(
           { mint: tok.mint.slice(0, 12), symbol: tok.symbol, reason: failureReason },
