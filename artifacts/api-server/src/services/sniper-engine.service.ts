@@ -21,6 +21,7 @@ import { releaseForRediscovery } from './trenches.service.js';
 
 const ENTRY_DELAY_MS        = 400;     // wait before entering
 const PRICE_CHECK_MS        = 1_500;   // reduced from 3s for snappier live prices
+const POLL_INTERVAL_MS      = 1_000;   // poll interval for scheduleBuyPoll
 const SOL_PRICE_TTL_MS      = 60_000;
 const MAX_BUY_LOG           = 100;
 const DEX_BASE              = 'https://api.dexscreener.com';
