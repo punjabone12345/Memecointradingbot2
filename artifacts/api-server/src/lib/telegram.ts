@@ -111,53 +111,90 @@ export async function notifyHeartbeat(params: {
   );
 }
 
+export async function notifyDiscovered(params: {
+  symbol: string; name?: string; mint: string; rugcheckOk: boolean;
+}): Promise<void> {
+  const { symbol, mint, rugcheckOk } = params;
+  await sendMessage(
+    `🔎 <b>NEW MIGRATED TOKEN</b>\n` +
+    `Token: $${symbol}\n` +
+    `CA: <code>${mint}</code>\n` +
+    `RugCheck: ${rugcheckOk ? 'PASSED' : 'FAILED'}\n` +
+    `Status: ${rugcheckOk ? 'TRACKING' : 'REJECTED'}`
+  );
+}
+
+export async function notifyThresholdsReached(params: {
+  symbol: string; mc: number; liquidity: number; elapsedMs: number; maxTrackingMs: number;
+}): Promise<void> {
+  const { symbol, mc, liquidity, elapsedMs, maxTrackingMs } = params;
+  const elapsedSec = Math.floor(elapsedMs / 1000);
+  const elapsedMin = Math.floor(elapsedSec / 60);
+  const elapsedSecRem = elapsedSec % 60;
+  const maxHours = Math.floor(maxTrackingMs / (3600 * 1000));
+  const timeStr = `${String(elapsedMin).padStart(2, '0')}:${String(elapsedSecRem).padStart(2, '0')} / ${maxHours}:00:00`;
+
+  await sendMessage(
+    `🎯 <b>THRESHOLDS REACHED</b>\n` +
+    `$${symbol}\n` +
+    `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `10-minute sustain started\n` +
+    `Tracking: ${timeStr}`
+  );
+}
+
+export async function notifySustainReset(params: {
+  symbol: string; reason: string; mc: number; liquidity: number;
+}): Promise<void> {
+  const { symbol, reason, mc, liquidity } = params;
+  await sendMessage(
+    `🔄 <b>SUSTAIN RESET</b>\n` +
+    `$${symbol}\n` +
+    `Reason: ${reason}\n` +
+    `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+  );
+}
+
+export async function notifySustainCompleted(params: {
+  symbol: string; mc: number; liquidity: number;
+}): Promise<void> {
+  const { symbol, mc, liquidity } = params;
+  await sendMessage(
+    `✅ <b>SUSTAIN COMPLETED</b>\n` +
+    `$${symbol}\n` +
+    `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `10-minute requirement satisfied\n` +
+    `Trade eligibility: PASSED`
+  );
+}
+
+export async function notifyTrackingExpired(params: {
+  symbol: string;
+}): Promise<void> {
+  const { symbol } = params;
+  await sendMessage(
+    `⏰ <b>TRACKING EXPIRED</b>\n` +
+    `$${symbol}\n` +
+    `Reason: 2-hour tracking window exceeded\n` +
+    `No trade executed.`
+  );
+}
+
 export async function notifySniperTrade(params: {
   name: string; symbol: string; mint: string;
-  buyAmountUsd: number; sizePct: number; sizeSol: number;
-  entryPrice: number; priceAtBuyDetection: number; slippagePct: number;
-  buyerWallet?: string;
-  qualifyingWallets?: string[];
-  entryMode?: 'solo' | 'consensus'; entryScore?: number; qualifyingWalletsCount?: number;
-  priceSource?: 'vault' | 'pool-account' | 'jupiter'; tpTier?: 1 | 2 | 3;
+  sizeSol: number; entryPrice: number; entryMcap: number; liquidity: number;
 }): Promise<void> {
-  const {
-    name, symbol, mint, buyAmountUsd, sizePct, sizeSol, entryPrice, priceAtBuyDetection, slippagePct, buyerWallet,
-    qualifyingWallets, entryMode, entryScore, qualifyingWalletsCount, priceSource, tpTier,
-  } = params;
-  const actualSlip = priceAtBuyDetection > 0
-    ? ((entryPrice - priceAtBuyDetection) / priceAtBuyDetection * 100).toFixed(1)
-    : '0.0';
-
-  // For consensus mode: show ALL qualifying wallet addresses; for solo: show the single buyer wallet
-  let walletLine = '';
-  if (entryMode === 'consensus' && qualifyingWallets && qualifyingWallets.length > 0) {
-    walletLine = qualifyingWallets
-      .map((w, i) => `Wallet ${i + 1}: <code>${w}</code>`)
-      .join('\n') + '\n';
-  } else if (buyerWallet && buyerWallet !== 'unknown') {
-    walletLine = `Buyer Wallet: <code>${buyerWallet}</code>\n`;
-  }
-
-  const modeLine = entryMode === 'consensus'
-    ? `✅ Entry Mode: Consensus (${qualifyingWalletsCount ?? '?'} wallets ≥80, top score ${entryScore ?? '?'})\n`
-    : `✅ Entry Mode: Solo conviction (score ${entryScore ?? '?'} ≥ 95)\n`;
-  const sourceLabel = priceSource === 'vault' ? 'On-chain vault read'
-    : priceSource === 'pool-account' ? 'On-chain pool reserves'
-    : priceSource === 'jupiter' ? 'Jupiter quote'
-    : 'Unknown';
+  const { name, symbol, mint, sizeSol, entryPrice, entryMcap, liquidity } = params;
   await sendMessage(
-    `🎯 <b>ENTRY CHECKLIST — ${symbol}</b> (${name})\n` +
-    `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
-    walletLine +
-    `✅ Wallet Score Gate: passed\n` +
-    modeLine +
-    `✅ Price Source: ${sourceLabel}\n` +
-    `✅ Slippage: ${actualSlip}% (max ${slippagePct}%)\n` +
-    `✅ Position Size: ${sizePct.toFixed(2)}% (Tier ${tpTier ?? '?'})\n` +
-    `Buyer Activity: ${buyAmountUsd.toFixed(0)}\n` +
-    `Size: ${sizeSol.toFixed(3)} SOL\n` +
-    `Entry Price: ${entryPrice.toFixed(8)}\n` +
-    `Detected Price: ${priceAtBuyDetection.toFixed(8)}\n` +
+    `🎯 <b>TRADE EXECUTED — ${symbol}</b> (${name})\n` +
+    `CA: <code>${mint}</code>\n` +
+    `Entry MC: $${entryMcap.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Position Size: ${sizeSol.toFixed(3)} SOL\n` +
+    `Entry Price: $${entryPrice.toFixed(8)}\n` +
     `Time: ${toIST(new Date())}`
   );
 }

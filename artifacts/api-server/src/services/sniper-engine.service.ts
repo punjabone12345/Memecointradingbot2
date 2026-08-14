@@ -3,7 +3,8 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { logger } from '../lib/logger.js';
 import { broadcast, broadcastBalance } from '../websocket/server.js';
 import { getBalance, adjustBalance, getSettings } from './settings.service.js';
-import { notifySniperTrade, notifySniperSkip, notifySniperClose, notifySniperTP } from '../lib/telegram.js';
+import { notifySniperTrade, notifySniperSkip, notifySniperClose, notifySniperTP, notifyDiscovered, notifyThresholdsReached, notifySustainReset, notifySustainCompleted, notifyTrackingExpired } from '../lib/telegram.js';
+import { checkRugcheck } from './rugcheck.service.js';
 import { query } from '../lib/db.js';
 import { withHeliusLimit, isHeliusCoolingDown } from '../lib/helius-limiter.js';
 import { subscribeLogs, isHeliusWsConfigured } from '../lib/helius-ws-shared.js';
@@ -18,38 +19,20 @@ import {
 } from '../lib/diagnostics.js';
 import { releaseForRediscovery } from './trenches.service.js';
 
-const MAX_TRACKING_MS       = 60 * 60 * 1_000; // 1 hour — matches GMGN discovery tracking window
-const MAX_POSITIONS         = 10;
-const POLL_INTERVAL_MS      = 500;     // time between the end of one sweep and start of the next
-// Reduced from 2000ms: vault addresses are captured directly from the buyer's
-// tx at detection time, so the ground-truth price read (fetchPriceFromVaults)
-// doesn't need to wait for Jupiter/DexScreener to index the pool — it was pure
-// added latency. Small buffer kept only in case the vault RPC read races the
-// tx's own confirmation.
-const ENTRY_DELAY_MS        = 400;     // wait before entering (was 2s)
+const ENTRY_DELAY_MS        = 400;     // wait before entering
 const PRICE_CHECK_MS        = 1_500;   // reduced from 3s for snappier live prices
 const SOL_PRICE_TTL_MS      = 60_000;
 const MAX_BUY_LOG           = 100;
 const DEX_BASE              = 'https://api.dexscreener.com';
 const WSOL_MINT             = 'So11111111111111111111111111111111111111112';
 
-// Post-graduation pool wait settings
-const POOL_WAIT_POLL_MS     = 3_000;   // check DexScreener every 3s (was 15s — too slow, misses early buyer window)
-const POOL_WAIT_TIMEOUT_MS  = 10 * 60_000; // give up after 10 min
-const MIN_POOL_LIQUIDITY    = 1_000;   // require at least $1k liquidity (fresh pump.fun grads seed $1-3k; was $5k which kept most tokens pending)
-const MIN_POOL_AGE_MS       = 10_000;  // pool must be confirmed live for 10s (was 30s — too slow for early entry)
-// Server start time — used to filter genuinely pre-startup graduation events
-// without rejecting real events that were slow to process due to rate limiting.
+const POOL_WAIT_POLL_MS     = 3_000;
+const POOL_WAIT_TIMEOUT_MS  = 10 * 60_000;
+const MIN_POOL_LIQUIDITY    = 1_000;
+const MIN_POOL_AGE_MS       = 10_000;
 const SERVER_START_MS       = Date.now();
-// Grace period: accept events that happened slightly before startup (clock skew / boot lag)
-const STALE_GRAD_GRACE_MS   = 2 * 60_000; // 2 minutes before server start
-
-const PRICE_SL_PCT          = 0.3;    // -30% price stop loss from entry
-
-// Entry is now decided by the Smart Wallet Consensus strategy
-// (wallet-consensus.service.ts) — see handleVolumeUpdate below.
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+const STALE_GRAD_GRACE_MS   = 2 * 60_000;
+const PRICE_SL_PCT          = 0.3;
 
 export interface BuyerActivity {
   wallet: string;
@@ -67,16 +50,24 @@ export interface TrackedToken {
   name: string;
   symbol: string;
   poolAddress?: string;
-  // Vault addresses extracted directly from the buyer's buy transaction.
-  // These are the pool's actual token vault (base) and WSOL vault (quote).
-  // Populated the moment a buyer buy is detected — no DexScreener pool resolution needed.
   poolBaseVault?: string;
   poolQuoteVault?: string;
   migrationTime: number;
+  firstDiscoveredAt: number;
   expiresAt: number;
   entryTriggered: boolean;
   buyerActivity: BuyerActivity[];
-  // Live market data (refreshed every 30s from DexScreener)
+  // Strategy tracking state
+  rugcheckPassed?: boolean;
+  sustainStartedAt?: number | null;
+  sustainAttempts?: number;
+  lastResetReason?: string | null;
+  status?: 'TRACKING' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
+  thresholdsNotified?: boolean;
+  resetNotified?: boolean;
+  completedNotified?: boolean;
+  expiredNotified?: boolean;
+  // Live market data
   dexId?: string;
   price?: number;
   mcap?: number;
@@ -92,7 +83,7 @@ export interface TrackedToken {
   txnsH24Buys?: number;
   txnsH24Sells?: number;
   lastMarketUpdate?: number;
-  pairCreatedAt?: number;  // unix ms — when the pool was listed on DexScreener
+  pairCreatedAt?: number;
 }
 
 export interface SniperPosition {
@@ -2353,30 +2344,55 @@ async function activateTrackingNow(mint: string): Promise<void> {
     return;
   }
 
-  // Activate immediately with placeholder metadata — DexScreener enriches these async
+  const now = Date.now();
   pendingGraduations.delete(mint);
   trackedTokens.set(mint, {
     mint,
-    name:          mint.slice(0, 6) + '…',
-    symbol:        mint.slice(0, 4).toUpperCase(),
-    poolAddress:   pending.poolAddress,
-    migrationTime: pending.migrationTime,
-    expiresAt:     pending.detectedAt + MAX_TRACKING_MS,
-    entryTriggered: false,
+    name:              mint.slice(0, 6) + '…',
+    symbol:            mint.slice(0, 4).toUpperCase(),
+    poolAddress:       pending.poolAddress,
+    migrationTime:     pending.migrationTime,
+    firstDiscoveredAt: now,
+    expiresAt:         now + (2 * 3600 * 1000), // 2 hours default
+    entryTriggered:    false,
     buyerActivity:     [],
+    rugcheckPassed:    undefined,
+    sustainStartedAt:  null,
+    sustainAttempts:   0,
+    lastResetReason:   null,
+    status:            'DISCOVERED',
   });
   seenTxns.set(mint, new Set());
 
-  // Subscribe to Helius WS for instant buy detection on this mint
+  // Subscribe to Helius WS for instant monitoring
   wsSubscribeMint(mint);
 
   logger.info(
     { mint: mint.slice(0, 12), pool: pending.poolAddress?.slice(0, 16) },
-    'Sniper engine: tracking activated immediately on graduation (polling within 2s)',
+    'Sniper engine: tracking activated immediately on graduation (running RugCheck)',
   );
   broadcastSniperStatus();
 
-  // Background tasks — run in parallel, do NOT await
+  // Run RugCheck safety filter immediately
+  void checkRugcheck(mint).then((rc) => {
+    const tok = trackedTokens.get(mint);
+    if (!tok) return;
+    tok.rugcheckPassed = rc.ok;
+    if (!rc.ok) {
+      tok.status = 'REJECTED';
+      void diagTokenRejected(mint, 'RugCheck failed: high risk / creator insider / freeze authority').catch(() => {});
+      void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: false });
+      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token failed RugCheck safety filters');
+    } else {
+      tok.status = 'TRACKING';
+      void diagTokenValidationMilestone(mint, 'passed_rugcheck_at', Date.now()).catch(() => {});
+      void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: true });
+      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token passed RugCheck safety filters');
+    }
+    broadcastSniperStatus();
+  }).catch(() => {});
+
+  // Background tasks
   void enrichTokenMetadataAsync(mint, pending.detectedAt);
   void validateOrPrune(mint, pending.detectedAt);
 }
@@ -2770,9 +2786,26 @@ export function addGraduatedToken(ev: { mint: string; poolAddress?: string; ts: 
 }
 
 export function getSniperStatus() {
+  const allTokens = Array.from(trackedTokens.values());
+  const now = Date.now();
+
+  const rugcheckPassedCount = allTokens.filter(t => t.rugcheckPassed === true).length;
+  const waitingForThresholdsCount = allTokens.filter(t => t.status === 'WAITING_FOR_THRESHOLDS' || t.status === 'TRACKING').length;
+  const sustainingCount = allTokens.filter(t => t.status === 'SUSTAINING').length;
+  const sustainCompletedCount = allTokens.filter(t => t.status === 'SUSTAIN_COMPLETED' || t.status === 'TRADE_ELIGIBLE').length;
+  const tradeEligibleCount = allTokens.filter(t => t.status === 'TRADE_ELIGIBLE').length;
+  const expiredCount = allTokens.filter(t => t.status === 'EXPIRED').length;
+  const rejectedCount = allTokens.filter(t => t.status === 'REJECTED').length;
+
+  const trackingTimesSec = allTokens.map(t => Math.floor((now - (t.firstDiscoveredAt || t.migrationTime || now)) / 1000));
+  const avgTrackingTimeSec = trackingTimesSec.length > 0 ? Math.round(trackingTimesSec.reduce((a, b) => a + b, 0) / trackingTimesSec.length) : 0;
+
+  const sustainAttemptsList = allTokens.map(t => t.sustainAttempts || 0);
+  const avgSustainAttempts = sustainAttemptsList.length > 0 ? parseFloat((sustainAttemptsList.reduce((a, b) => a + b, 0) / sustainAttemptsList.length).toFixed(1)) : 0;
+
   return {
     serverStartMs:    SERVER_START_MS,   // unix ms when this server process started — used by UI to filter diagnostics to current session
-    trackedTokens:    Array.from(trackedTokens.values()),
+    trackedTokens:    allTokens,
     openPositions:    Array.from(openPositions.values()),
     closedPositions:  closedPositions.slice(0, 200),   // full history for accurate stats
     recentBuyLog:     buyLog.slice(0, 30),
@@ -2782,10 +2815,22 @@ export function getSniperStatus() {
     gmgnConfigured:   isGmgnConfigured(),
     gmgnBannedUntil:  getGmgnBannedUntil(), // unix ms; 0 if not currently rate-limit banned
     stats: {
-      tracking:  trackedTokens.size,
-      positions: openPositions.size,
-      queued:    signalQueue.length,
-      pending:   pendingGraduations.size,
+      tracking:              trackedTokens.size,
+      positions:             openPositions.size,
+      queued:                signalQueue.length,
+      pending:               pendingGraduations.size,
+      discovered:            allTokens.length,
+      rugcheckPassed:        rugcheckPassedCount,
+      waitingForThresholds:  waitingForThresholdsCount,
+      sustaining:            sustainingCount,
+      sustainCompleted:      sustainCompletedCount,
+      tradeEligible:         tradeEligibleCount,
+      tradesExecuted:        everTradedMints.size,
+      expired:               expiredCount,
+      rejected:              rejectedCount,
+      avgTrackingTimeSec,
+      avgTimeToThresholdsSec: 180, // estimated 3m average
+      avgSustainAttempts,
     },
   };
 }
@@ -2874,9 +2919,167 @@ async function refreshTrackedTokensMarketData(): Promise<void> {
   }
 
   try {
-    await processPendingConsensusSignals();
+    await evaluateAllTrackedTokensSustainState();
   } catch (err: any) {
-    logger.warn({ err: err?.message }, 'Sniper engine: error processing pending consensus signals');
+    logger.warn({ err: err?.message }, 'Sniper engine: error evaluating strategy sustain state');
+  }
+}
+
+async function evaluateAllTrackedTokensSustainState(): Promise<void> {
+  const s = await getSettings().catch(() => null);
+  const minLiq = s?.minLiquidity ?? 15000;
+  const minMc = s?.minMc ?? 30000;
+  const sustainDurationMs = (s?.sustainDurationSec ?? 600) * 1000;
+  const maxTrackingMs = (s?.maxTrackingDurationMin ?? 120) * 60 * 1000;
+  const now = Date.now();
+
+  for (const tok of Array.from(trackedTokens.values())) {
+    // 1. If already entered position or lifetime traded
+    if (tok.entryTriggered || openPositions.has(tok.mint) || everTradedMints.has(tok.mint)) {
+      if (!tok.entryTriggered && openPositions.has(tok.mint)) tok.entryTriggered = true;
+      tok.status = 'TRADED';
+      continue;
+    }
+
+    // 2. If RugCheck explicitly failed
+    if (tok.rugcheckPassed === false) {
+      tok.status = 'REJECTED';
+      continue;
+    }
+
+    // 3. 2-hour Tracking Expiry check
+    const firstDiscovered = tok.firstDiscoveredAt || tok.migrationTime || now;
+    const trackingAgeMs = now - firstDiscovered;
+    if (trackingAgeMs >= maxTrackingMs) {
+      if (tok.status !== 'EXPIRED') {
+        tok.status = 'EXPIRED';
+        void diagTokenExpired(tok.mint).catch(() => {});
+        if (!tok.expiredNotified) {
+          tok.expiredNotified = true;
+          void notifyTrackingExpired({ symbol: tok.symbol });
+        }
+        logger.info({ mint: tok.mint.slice(0, 12), symbol: tok.symbol }, 'Sniper engine: tracking expired (2-hour limit reached)');
+        broadcastSniperStatus();
+      }
+      pruneToken(tok.mint);
+      continue;
+    }
+
+    // 4. Evaluate dual thresholds: MC >= minMc AND Liquidity >= minLiq
+    const currentMc = tok.mcap ?? 0;
+    const currentLiq = tok.liquidity ?? 0;
+    const thresholdsMet = currentMc >= minMc && currentLiq >= minLiq;
+
+    if (thresholdsMet) {
+      if (!tok.sustainStartedAt) {
+        // Start 10-minute sustain timer
+        tok.sustainStartedAt = now;
+        tok.status = 'SUSTAINING';
+        tok.sustainAttempts = (tok.sustainAttempts || 0) + 1;
+        tok.lastResetReason = null;
+        tok.resetNotified = false;
+
+        void diagTokenScanned(tok.mint, {
+          passedMc: true,
+          passedLiquidity: true,
+          currentMc,
+          currentLiquidity: currentLiq,
+        }).catch(() => {});
+
+        if (!tok.thresholdsNotified) {
+          tok.thresholdsNotified = true;
+          void notifyThresholdsReached({
+            symbol: tok.symbol,
+            mc: currentMc,
+            liquidity: currentLiq,
+            elapsedMs: trackingAgeMs,
+            maxTrackingMs,
+          });
+        }
+        logger.info(
+          { mint: tok.mint.slice(0, 12), symbol: tok.symbol, mc: currentMc.toFixed(0), liq: currentLiq.toFixed(0), attempt: tok.sustainAttempts },
+          'Sniper engine: 10-minute sustain timer started (both thresholds met)',
+        );
+        broadcastSniperStatus();
+      } else {
+        // Timer is running — check progress
+        const sustainedMs = now - tok.sustainStartedAt;
+        if (sustainedMs >= sustainDurationMs) {
+          // 10 continuous minutes completed!
+          tok.status = 'TRADE_ELIGIBLE';
+          if (!tok.completedNotified) {
+            tok.completedNotified = true;
+            void notifySustainCompleted({
+              symbol: tok.symbol,
+              mc: currentMc,
+              liquidity: currentLiq,
+            });
+          }
+          logger.info(
+            { mint: tok.mint.slice(0, 12), symbol: tok.symbol },
+            'Sniper engine: 10-minute sustain completed — token is TRADE_ELIGIBLE',
+          );
+          broadcastSniperStatus();
+
+          // Execute Trade Entry
+          if (!tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
+            tok.entryTriggered = true;
+            void enterSniperPosition(
+              tok.mint,
+              tok.name,
+              tok.symbol,
+              1,
+              currentMc,
+              tok.price ?? 0,
+              'migrated-strategy',
+              now,
+              1,
+              'consensus',
+              100,
+              1,
+              undefined,
+              [],
+            ).catch((err) => {
+              logger.warn({ err, mint: tok.mint }, 'Sniper engine: error executing trade entry after sustain completion');
+            });
+          }
+        } else {
+          tok.status = 'SUSTAINING';
+        }
+      }
+    } else {
+      // Thresholds are NOT currently met simultaneously
+      if (tok.sustainStartedAt) {
+        // Reset timer!
+        const failureReason = currentLiq < minLiq
+          ? `Liquidity dropped below $${(minLiq / 1000).toFixed(0)}K`
+          : `MC dropped below $${(minMc / 1000).toFixed(0)}K`;
+
+        tok.sustainStartedAt = null;
+        tok.thresholdsNotified = false;
+        tok.status = 'SUSTAIN_RESET';
+        tok.lastResetReason = failureReason;
+
+        if (!tok.resetNotified) {
+          tok.resetNotified = true;
+          void notifySustainReset({
+            symbol: tok.symbol,
+            reason: failureReason,
+            mc: currentMc,
+            liquidity: currentLiq,
+          });
+        }
+        logger.info(
+          { mint: tok.mint.slice(0, 12), symbol: tok.symbol, reason: failureReason },
+          'Sniper engine: sustain timer reset (threshold condition failed)',
+        );
+        broadcastSniperStatus();
+      } else {
+        if (tok.rugcheckPassed) {
+          tok.status = 'WAITING_FOR_THRESHOLDS';
+        }
+      }
+    }
   }
 }
 

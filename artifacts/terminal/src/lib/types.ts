@@ -22,6 +22,10 @@ export interface Settings {
   wt3Tp1Pct: number;  wt3Tp1Exit: number;
   wt3Tp2Pct: number;  wt3Tp2Exit: number;  wt3Tp2Trail: number;
   wt3Tp3Pct: number;  wt3Tp3Exit: number;  wt3Tp3Trail: number;
+  minLiquidity: number;
+  minMc: number;
+  sustainDurationSec: number;
+  maxTrackingDurationMin: number;
 }
 
 export interface BuyerActivity {
@@ -39,10 +43,17 @@ export interface TrackedToken {
   symbol: string;
   poolAddress?: string;
   migrationTime: number;
+  firstDiscoveredAt?: number;
   expiresAt: number;
   entryTriggered: boolean;
   buyerActivity: BuyerActivity[];
-  // Live market data (refreshed every 10s by the server from DexScreener)
+  // Strategy Tracking State
+  rugcheckPassed?: boolean;
+  sustainStartedAt?: number | null;
+  sustainAttempts?: number;
+  lastResetReason?: string | null;
+  status?: 'TRACKING' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
+  // Live market data
   dexId?: string;
   price?: number;
   mcap?: number;
@@ -190,7 +201,7 @@ export interface DiagToken {
   passed_creator_at: number | null;
   passed_wallet_at: number | null;
   passed_entry_at: number | null;
-  status: 'DISCOVERED' | 'TRACKED' | 'TRADED' | 'REJECTED' | 'EXPIRED';
+  status: 'DISCOVERED' | 'TRACKED' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED';
   reject_reason: string | null;
   entry_time: number | null;
   entry_price: number | null;

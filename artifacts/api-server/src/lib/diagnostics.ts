@@ -474,17 +474,13 @@ export async function getDiagTopRejected(opts: { since?: number } = {}): Promise
 
   return query<unknown>(`
     SELECT *,
-      -- Proximity score 0–100: how close this token came to being traded
       LEAST(100, ROUND(
-        (COALESCE(highest_wallet_score, 0)        * 0.40) +
-        (LEAST(COALESCE(highest_qualifying_wallets, 0), 2) * 15.0) +
-        (CASE WHEN passed_wallet_at    IS NOT NULL THEN 15 ELSE 0 END) +
-        (CASE WHEN passed_liquidity_at IS NOT NULL THEN 10 ELSE 0 END) +
-        (CASE WHEN passed_mc_at        IS NOT NULL THEN  5 ELSE 0 END) +
-        (CASE WHEN passed_volume_at    IS NOT NULL THEN  5 ELSE 0 END) +
-        (CASE WHEN passed_rugcheck_at  IS NOT NULL THEN  5 ELSE 0 END) +
-        (CASE WHEN passed_holder_at    IS NOT NULL THEN  3 ELSE 0 END) +
-        (CASE WHEN passed_creator_at   IS NOT NULL THEN  2 ELSE 0 END)
+        (CASE WHEN status IN ('TRADE_ELIGIBLE', 'SUSTAIN_COMPLETED', 'TRADED') THEN 50 ELSE 0 END) +
+        (CASE WHEN sustain_started_at IS NOT NULL THEN 25 ELSE 0 END) +
+        (LEAST(COALESCE(sustain_attempts, 0), 3) * 5.0) +
+        (CASE WHEN passed_rugcheck_at  IS NOT NULL THEN 10 ELSE 0 END) +
+        (CASE WHEN highest_mc >= 30000 THEN 10 ELSE LEAST(10, (COALESCE(highest_mc, 0) / 30000.0) * 10) END) +
+        (CASE WHEN highest_liquidity >= 15000 THEN 5 ELSE LEAST(5, (COALESCE(highest_liquidity, 0) / 15000.0) * 5) END)
       )) AS proximity_score,
       to_char(to_timestamp(first_seen_at / 1000) AT TIME ZONE 'UTC',         'YYYY-MM-DD HH24:MI:SS') AS first_seen_utc,
       to_char(to_timestamp(first_seen_at / 1000) AT TIME ZONE 'Asia/Kolkata','YYYY-MM-DD HH24:MI:SS') AS first_seen_ist
@@ -492,7 +488,7 @@ export async function getDiagTopRejected(opts: { since?: number } = {}): Promise
     ${where}
     ORDER BY
       proximity_score DESC,
-      highest_wallet_score DESC
+      created_at DESC
     LIMIT 20
   `, params);
 }
@@ -627,49 +623,39 @@ export async function getDiagFunnelStats(opts: { since?: number } = {}): Promise
 
   const funnel = await query<{
     total: string;
-    ever_passed_wallet: string;
-    ever_passed_liquidity: string;
-    ever_reached_entry: string;
+    passed_rugcheck: string;
+    tracking: string;
+    thresholds_reached: string;
+    sustain_started: string;
+    trade_eligible: string;
     traded: string;
-    rejected_wallet: string;
-    rejected_liquidity: string;
-    rejected_age: string;
-    rejected_freeze: string;
-    rejected_slippage: string;
-    rejected_pool: string;
+    rejected_rugcheck: string;
+    rejected_sustain_reset: string;
+    expired: string;
     rejected_other: string;
   }>(`
     SELECT
       COUNT(*)::text                                                        AS total,
-      COUNT(*) FILTER (WHERE passed_wallet_at    IS NOT NULL)::text         AS ever_passed_wallet,
-      COUNT(*) FILTER (WHERE passed_liquidity_at IS NOT NULL)::text         AS ever_passed_liquidity,
-      COUNT(*) FILTER (WHERE passed_entry_at     IS NOT NULL)::text         AS ever_reached_entry,
+      COUNT(*) FILTER (WHERE passed_rugcheck_at  IS NOT NULL)::text         AS passed_rugcheck,
+      COUNT(*) FILTER (WHERE status NOT IN ('DISCOVERED', 'REJECTED'))::text AS tracking,
+      COUNT(*) FILTER (WHERE passed_liquidity_at IS NOT NULL OR sustain_started_at IS NOT NULL)::text AS thresholds_reached,
+      COUNT(*) FILTER (WHERE sustain_started_at  IS NOT NULL)::text         AS sustain_started,
+      COUNT(*) FILTER (WHERE status IN ('SUSTAIN_COMPLETED', 'TRADE_ELIGIBLE', 'TRADED') OR passed_entry_at IS NOT NULL)::text AS trade_eligible,
       COUNT(*) FILTER (WHERE status = 'TRADED')::text                       AS traded,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%wallet%'
-                          OR reject_reason ILIKE '%score%'
-                          OR reject_reason ILIKE '%consensus%')::text       AS rejected_wallet,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%liquidity%'
-                          OR reject_reason ILIKE '%sol%')::text             AS rejected_liquidity,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%too new%'
-                          OR reject_reason ILIKE '%age%'
-                          OR reject_reason ILIKE '%min old%')::text         AS rejected_age,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%freeze%')::text          AS rejected_freeze,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%slippage%')::text        AS rejected_slippage,
-      COUNT(*) FILTER (WHERE reject_reason ILIKE '%pool%'
-                          OR reject_reason ILIKE '%prune%')::text           AS rejected_pool,
+      COUNT(*) FILTER (WHERE reject_reason ILIKE '%rugcheck%'
+                          OR reject_reason ILIKE '%freeze%'
+                          OR reject_reason ILIKE '%mint%')::text           AS rejected_rugcheck,
+      COUNT(*) FILTER (WHERE last_reset_reason IS NOT NULL
+                          OR reject_reason ILIKE '%reset%'
+                          OR reject_reason ILIKE '%dropped%')::text        AS rejected_sustain_reset,
+      COUNT(*) FILTER (WHERE status = 'EXPIRED'
+                          OR reject_reason ILIKE '%expire%'
+                          OR reject_reason ILIKE '%2-hour%')::text         AS expired,
       COUNT(*) FILTER (WHERE status IN ('REJECTED','EXPIRED')
-                          AND reject_reason NOT ILIKE '%wallet%'
-                          AND reject_reason NOT ILIKE '%score%'
-                          AND reject_reason NOT ILIKE '%consensus%'
-                          AND reject_reason NOT ILIKE '%liquidity%'
-                          AND reject_reason NOT ILIKE '%sol%'
-                          AND reject_reason NOT ILIKE '%too new%'
-                          AND reject_reason NOT ILIKE '%age%'
-                          AND reject_reason NOT ILIKE '%min old%'
-                          AND reject_reason NOT ILIKE '%freeze%'
-                          AND reject_reason NOT ILIKE '%slippage%'
-                          AND reject_reason NOT ILIKE '%pool%'
-                          AND reject_reason NOT ILIKE '%prune%')::text      AS rejected_other
+                          AND reject_reason NOT ILIKE '%rugcheck%'
+                          AND reject_reason NOT ILIKE '%reset%'
+                          AND reject_reason NOT ILIKE '%dropped%'
+                          AND reject_reason NOT ILIKE '%expire%')::text     AS rejected_other
     FROM diag_tokens
     WHERE created_at >= $1
   `, [cutoff]);

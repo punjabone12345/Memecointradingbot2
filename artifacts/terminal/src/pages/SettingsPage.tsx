@@ -284,13 +284,37 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
         );
       })()}
 
-      {/* Sniper engine context banner */}
-      <div style={{ padding: '12px 14px', borderRadius: 12, background: 'rgba(0,191,255,0.06)', border: '1px solid rgba(0,191,255,0.18)', marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: '#00bfff', letterSpacing: '0.06em', marginBottom: 4 }}>🎯 SNIPER ENGINE MODE</div>
-        <div style={{ fontSize: 11, color: '#3a5070', lineHeight: 1.6 }}>
-          Entry size is determined by Consensus (2+ wallets ≥80 within 5 min) — 1% risk, Tier 2 TP ladder. Positions are held <b style={{ color: '#c0c8e0' }}>indefinitely</b> — no time limit. Exit only via TP/SL, liquidity emergency, or stagnation (&lt;X% move in 1h).
-        </div>
-      </div>
+      {/* Migrated Token Strategy settings banner */}
+      <Section title="Migrated Token Strategy Parameters" color="#00d4ff">
+        <NumberInput
+          label="Minimum Liquidity ($)"
+          value={n('minLiquidity') || 15000}
+          onChange={(v) => update('minLiquidity', v)}
+          min={1000} max={1000000} step={1000} suffix="USD"
+          sublabel="Token liquidity threshold required for sustain timer (Default: $15,000)"
+        />
+        <NumberInput
+          label="Minimum Market Cap ($)"
+          value={n('minMc') || 30000}
+          onChange={(v) => update('minMc', v)}
+          min={5000} max={5000000} step={5000} suffix="USD"
+          sublabel="Token Market Cap threshold required for sustain timer (Default: $30,000)"
+        />
+        <NumberInput
+          label="Sustain Gate Duration (Seconds)"
+          value={n('sustainDurationSec') || 600}
+          onChange={(v) => update('sustainDurationSec', v)}
+          min={60} max={7200} step={30} suffix="SEC"
+          sublabel="Continuous duration both Liquidity and MC thresholds must be sustained (Default: 600s / 10 min)"
+        />
+        <NumberInput
+          label="Max Tracking Window (Minutes)"
+          value={n('maxTrackingDurationMin') || 120}
+          onChange={(v) => update('maxTrackingDurationMin', v)}
+          min={15} max={1440} step={15} suffix="MIN"
+          sublabel="Maximum duration a token is tracked for threshold sustain before expiring (Default: 120m / 2 hours)"
+        />
+      </Section>
 
       <Section title="Position Sizing" color="#00ff88">
         <NumberInput

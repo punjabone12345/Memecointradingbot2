@@ -56,6 +56,10 @@ export async function getSettings(): Promise<Settings> {
     wt3Tp1Pct: num('wt3Tp1Pct', 150),  wt3Tp1Exit: num('wt3Tp1Exit', 30),
     wt3Tp2Pct: num('wt3Tp2Pct', 350),  wt3Tp2Exit: num('wt3Tp2Exit', 30),  wt3Tp2Trail: num('wt3Tp2Trail', 20),
     wt3Tp3Pct: num('wt3Tp3Pct', 550),  wt3Tp3Exit: num('wt3Tp3Exit', 30),  wt3Tp3Trail: num('wt3Tp3Trail', 10),
+    minLiquidity: num('minLiquidity', 15000),
+    minMc: num('minMc', 30000),
+    sustainDurationSec: num('sustainDurationSec', 600),
+    maxTrackingDurationMin: num('maxTrackingDurationMin', 120),
   };
 
   settingsCache = settings;

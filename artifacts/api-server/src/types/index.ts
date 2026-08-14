@@ -25,6 +25,10 @@ export interface Settings {
   wt3Tp1Pct: number;  wt3Tp1Exit: number;
   wt3Tp2Pct: number;  wt3Tp2Exit: number;  wt3Tp2Trail: number;
   wt3Tp3Pct: number;  wt3Tp3Exit: number;  wt3Tp3Trail: number;
+  minLiquidity: number;
+  minMc: number;
+  sustainDurationSec: number;
+  maxTrackingDurationMin: number;
 }
 
 export interface WSMessage {

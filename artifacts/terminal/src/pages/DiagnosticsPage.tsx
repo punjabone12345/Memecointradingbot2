@@ -107,47 +107,74 @@ function FunnelBar({ label, count, total, color }: { label: string; count: numbe
   );
 }
 
+// ── Status Styling Maps ───────────────────────────────────────────────────────
+
+const STATUS_COLOR: Record<string, string> = {
+  DISCOVERED:             '#a0b8d8',
+  TRACKING:               '#00d4ff',
+  WAITING_FOR_THRESHOLDS: '#00bfff',
+  SUSTAINING:             '#ffd700',
+  SUSTAIN_RESET:          '#ffaa00',
+  SUSTAIN_COMPLETED:      '#00ff88',
+  TRADE_ELIGIBLE:         '#00ff88',
+  TRADED:                 '#00ff88',
+  EXPIRED:                '#808080',
+  REJECTED:               '#ff4466',
+};
+
+const STATUS_ICON: Record<string, string> = {
+  DISCOVERED:             '🔍',
+  TRACKING:               '👀',
+  WAITING_FOR_THRESHOLDS: '⏳',
+  SUSTAINING:             '⏱',
+  SUSTAIN_RESET:          '🔄',
+  SUSTAIN_COMPLETED:      '✅',
+  TRADE_ELIGIBLE:         '🎯',
+  TRADED:                 '🚀',
+  EXPIRED:                '⏰',
+  REJECTED:               '❌',
+};
+
 // ── Funnel Panel ─────────────────────────────────────────────────────────────
 
 function FunnelPanel({ funnel }: { funnel: DiagFunnelStats | null }) {
   if (!funnel) return (
     <div style={{ ...C.card, marginBottom: 10 }}>
-      <SectionHeader title="📊 Discovery Funnel (Last 7 Days)" />
-      <div style={{ padding: 24, textAlign: 'center', color: C.gray, fontSize: 11 }}>Loading…</div>
+      <SectionHeader title="📊 Discovery Funnel (Session / 7 Days)" />
+      <div style={{ padding: 24, textAlign: 'center', color: C.gray, fontSize: 11 }}>Loading funnel stats…</div>
     </div>
   );
 
-  const total = parseInt(funnel.total, 10) || 1;
+  const total = parseInt(funnel.total ?? '0', 10) || 1;
   const steps = [
-    { label: 'Total Discovered',        count: parseInt(funnel.total, 10),               color: C.blue },
-    { label: 'Passed Liquidity Filter', count: parseInt(funnel.ever_passed_liquidity, 10), color: '#00bfff' },
-    { label: 'Passed Wallet Score',     count: parseInt(funnel.ever_passed_wallet, 10),    color: C.purple },
-    { label: 'Reached Entry Gate',      count: parseInt(funnel.ever_reached_entry, 10),    color: C.yellow },
-    { label: 'Actually Traded',         count: parseInt(funnel.traded, 10),                color: C.green },
+    { label: '1. Discovered (Pump.fun Migrations)', count: parseInt(funnel.total ?? '0', 10),              color: C.blue },
+    { label: '2. Passed RugCheck Safety Filter',  count: parseInt(funnel.passed_rugcheck ?? '0', 10),     color: '#00bfff' },
+    { label: '3. Reached Tracking Stage',          count: parseInt(funnel.tracking ?? '0', 10),            color: C.purple },
+    { label: '4. Reached $30K MC + $15K Liquidity',count: parseInt(funnel.thresholds_reached ?? '0', 10),  color: C.yellow },
+    { label: '5. 10-Minute Sustain Started',       count: parseInt(funnel.sustain_started ?? '0', 10),     color: '#ffa500' },
+    { label: '6. Sustain Completed / Eligible',    count: parseInt(funnel.trade_eligible ?? '0', 10),      color: '#00ff88' },
+    { label: '7. Executed Sniper Trade',           count: parseInt(funnel.traded ?? '0', 10),              color: C.green },
   ];
 
   const rejBreakdown = [
-    { label: 'Wallet / Score', count: parseInt(funnel.rejected_wallet, 10),    color: C.purple },
-    { label: 'Liquidity / SOL', count: parseInt(funnel.rejected_liquidity, 10), color: C.red },
-    { label: 'Token Age',       count: parseInt(funnel.rejected_age, 10),       color: C.yellow },
-    { label: 'Freeze Authority', count: parseInt(funnel.rejected_freeze, 10),   color: '#ff8844' },
-    { label: 'Slippage',        count: parseInt(funnel.rejected_slippage, 10),  color: '#ff6644' },
-    { label: 'Pool / Prune',    count: parseInt(funnel.rejected_pool, 10),      color: C.gray },
-    { label: 'Other',           count: parseInt(funnel.rejected_other, 10),     color: '#6688aa' },
+    { label: 'RugCheck / Freeze / Mint Risk', count: parseInt(funnel.rejected_rugcheck ?? '0', 10),     color: C.red },
+    { label: 'Sustain Resets (MC/Liq Drop)', count: parseInt(funnel.rejected_sustain_reset ?? '0', 10), color: C.orange },
+    { label: '2-Hour Tracking Expirations',  count: parseInt(funnel.expired ?? '0', 10),                color: C.gray },
+    { label: 'Other Rejections',             count: parseInt(funnel.rejected_other ?? '0', 10),          color: '#6688aa' },
   ];
 
   return (
     <div style={{ ...C.card, marginBottom: 10 }}>
-      <SectionHeader title="📊 Discovery Funnel (Last 7 Days)" sub="How many tokens pass each stage of the pipeline" />
+      <SectionHeader title="📊 Discovery Funnel (Session / 7 Days)" sub="Progression through RugCheck, $30K MC + $15K Liq thresholds, and 10-min sustain gate" />
       <div style={{ padding: '14px 16px' }}>
         {steps.map(s => <FunnelBar key={s.label} label={s.label} count={s.count} total={total} color={s.color} />)}
         <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ ...C.label, marginBottom: 10 }}>Rejection breakdown</div>
+          <div style={{ ...C.label, marginBottom: 10 }}>Rejection & Drop Breakdown</div>
           {rejBreakdown.filter(r => r.count > 0).map(r => (
-            <FunnelBar key={r.label} label={r.label} count={r.count} total={parseInt(funnel.total, 10) - parseInt(funnel.traded, 10)} color={r.color} />
+            <FunnelBar key={r.label} label={r.label} count={r.count} total={total - parseInt(funnel.traded ?? '0', 10)} color={r.color} />
           ))}
           {rejBreakdown.every(r => r.count === 0) && (
-            <div style={{ color: C.gray, fontSize: 11, textAlign: 'center', padding: '8px 0' }}>No rejections yet</div>
+            <div style={{ color: C.gray, fontSize: 11, textAlign: 'center', padding: '8px 0' }}>No rejections or expired tokens yet</div>
           )}
         </div>
       </div>
@@ -161,23 +188,22 @@ function SummaryPanel({ summary }: { summary: DiagDailySummary | null }) {
   if (!summary) return null;
 
   const s = summary;
-  const n = (v: string) => parseInt(v, 10);
 
   const statsGrid = [
-    { label: 'Discovered',     value: s.total_discovered,  color: C.blue },
-    { label: 'Total Scans',    value: s.total_scans,        color: C.text },
-    { label: 'Avg Scans/Token', value: `${parseFloat(s.avg_scans).toFixed(1)}×`, color: C.text },
-    { label: 'Passed Liquidity', value: s.passed_liquidity, color: '#00bfff' },
-    { label: 'Passed Wallet',  value: s.passed_wallet,      color: C.purple },
-    { label: 'Reached Entry',  value: s.passed_entry,       color: C.yellow },
-    { label: 'Traded',         value: s.total_traded,       color: C.green },
-    { label: 'Rejected',       value: s.total_rejected,     color: C.red },
-    { label: 'Expired',        value: s.total_expired,      color: C.gray },
+    { label: 'Discovered',     value: s.total_discovered, color: C.blue },
+    { label: 'Passed RugCheck',value: s.passed_rugcheck, color: '#00bfff' },
+    { label: 'Passed MC Target',value: s.passed_mc,       color: C.yellow },
+    { label: 'Passed Liq Target',value: s.passed_liquidity, color: '#ffa500' },
+    { label: 'Trade Eligible', value: s.passed_entry,     color: '#00ff88' },
+    { label: 'Traded',         value: s.total_traded,     color: C.green },
+    { label: 'Rejected',       value: s.total_rejected,   color: C.red },
+    { label: 'Expired (2h)',   value: s.total_expired,    color: C.gray },
+    { label: 'Tracked Active', value: s.total_tracked,    color: C.purple },
   ];
 
   return (
     <div style={{ ...C.card, marginBottom: 10 }}>
-      <SectionHeader title={`📅 Today's Summary — ${s.date}`} sub="Tokens discovered and processed since UTC midnight" />
+      <SectionHeader title={`📅 Today's Summary — ${s.date}`} sub="Strategy discovery, threshold scans, and trade stats since UTC midnight" />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1, background: 'rgba(255,255,255,0.04)' }}>
         {statsGrid.map(st => (
           <div key={st.label} style={{ background: C.bg, padding: '10px 8px', textAlign: 'center' }}>
@@ -187,7 +213,6 @@ function SummaryPanel({ summary }: { summary: DiagDailySummary | null }) {
         ))}
       </div>
 
-      {/* Rejection breakdown */}
       {s.rejectionBreakdown.length > 0 && (
         <div style={{ padding: '12px 14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <div style={{ ...C.label, marginBottom: 8 }}>Rejection Reasons</div>
@@ -201,21 +226,6 @@ function SummaryPanel({ summary }: { summary: DiagDailySummary | null }) {
           </div>
         </div>
       )}
-
-      {/* Error summary */}
-      {s.errorSummary.length > 0 && (
-        <div style={{ padding: '12px 14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ ...C.label, marginBottom: 8 }}>API / Technical Errors Today</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {s.errorSummary.map((e, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                <span style={{ color: C.yellow, fontWeight: 700 }}>{e.error_type}</span>
-                <span style={{ color: C.gray }}>{e.count}×</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -223,19 +233,17 @@ function SummaryPanel({ summary }: { summary: DiagDailySummary | null }) {
 // ── Token Row (expandable) ────────────────────────────────────────────────────
 
 function TokenRow({ tok, expanded, onToggle }: { tok: DiagToken; expanded: boolean; onToggle: () => void }) {
-  const status = tok.status;
+  const status      = tok.status;
   const statusColor = STATUS_COLOR[status] ?? C.gray;
   const statusIcon  = STATUS_ICON[status]  ?? '?';
 
-  const filters = [
-    { key: 'MC',       passed: tok.passed_mc_at        != null },
-    { key: 'Liq',      passed: tok.passed_liquidity_at != null },
-    { key: 'Vol',      passed: tok.passed_volume_at    != null },
-    { key: 'Rug',      passed: tok.passed_rugcheck_at  != null },
-    { key: 'Hold',     passed: tok.passed_holder_at    != null },
-    { key: 'Wallet',   passed: tok.passed_wallet_at    != null },
-    { key: 'Entry',    passed: tok.passed_entry_at     != null },
-  ];
+  const rcPassed  = tok.passed_rugcheck_at != null || tok.rugcheck_score != null;
+  const mcTarget  = (tok.highest_mc ?? 0) >= 30000;
+  const liqTarget = (tok.highest_liquidity ?? 0) >= 15000;
+
+  const sustainStart = tok.sustain_started_at;
+  const sustainSec   = sustainStart ? Math.floor((Date.now() - sustainStart) / 1000) : 0;
+  const sustainText  = sustainStart ? `${Math.floor(sustainSec / 60)}:${String(sustainSec % 60).padStart(2, '0')} / 10:00` : '—';
 
   return (
     <>
@@ -255,34 +263,34 @@ function TokenRow({ tok, expanded, onToggle }: { tok: DiagToken; expanded: boole
         <td style={{ padding: '8px 10px', fontSize: 10, color: C.gray, whiteSpace: 'nowrap' }}>
           {fmtTs(tok.first_seen_at)}
         </td>
-        <td style={{ padding: '8px 10px', fontSize: 10, color: '#c0d0e0', whiteSpace: 'nowrap' }}>
+        <td style={{ padding: '8px 10px', fontSize: 10, color: mcTarget ? C.green : C.text, whiteSpace: 'nowrap' }}>
           ${fmtNum(tok.highest_mc)}
         </td>
-        <td style={{ padding: '8px 10px', fontSize: 10, color: '#c0d0e0', whiteSpace: 'nowrap' }}>
+        <td style={{ padding: '8px 10px', fontSize: 10, color: liqTarget ? C.green : C.text, whiteSpace: 'nowrap' }}>
           ${fmtNum(tok.highest_liquidity)}
         </td>
         <td style={{ padding: '8px 10px' }}>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {filters.map(f => (
-              <span key={f.key} style={{ fontSize: 8, fontWeight: 800, padding: '1px 4px', borderRadius: 3, background: f.passed ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,102,0.08)', color: f.passed ? C.green : 'rgba(255,68,102,0.6)', border: `1px solid ${f.passed ? 'rgba(0,255,136,0.2)' : 'rgba(255,68,102,0.15)'}` }}>
-                {f.key}
-              </span>
-            ))}
-          </div>
+          <span style={{ fontSize: 9, fontWeight: 800, color: rcPassed ? C.green : C.red }}>
+            {rcPassed ? '✓ PASS' : '✗ FAIL'}
+          </span>
         </td>
-        <td style={{ padding: '8px 10px', maxWidth: 160 }}>
-          {tok.reject_reason ? (
-            <span style={{ fontSize: 9, color: C.red, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tok.reject_reason}>
-              {tok.reject_reason}
+        <td style={{ padding: '8px 10px', fontSize: 9, color: sustainStart ? C.yellow : C.gray }}>
+          {sustainText}
+        </td>
+        <td style={{ padding: '8px 10px', maxWidth: 180 }}>
+          {tok.last_reset_reason ? (
+            <span style={{ fontSize: 9, color: C.orange }} title={tok.last_reset_reason}>
+              🔄 Reset: {tok.last_reset_reason}
+            </span>
+          ) : tok.reject_reason ? (
+            <span style={{ fontSize: 9, color: C.red }} title={tok.reject_reason}>
+              ❌ {tok.reject_reason}
             </span>
           ) : status === 'TRADED' ? (
-            <span style={{ fontSize: 9, color: C.green }}>Trade executed ✅</span>
+            <span style={{ fontSize: 9, color: C.green }}>Executed ✅</span>
           ) : (
             <span style={{ fontSize: 9, color: C.gray }}>—</span>
           )}
-        </td>
-        <td style={{ padding: '8px 10px', fontSize: 9, color: C.gray }}>
-          {tok.scan_count}×
         </td>
       </tr>
       {expanded && (
@@ -297,32 +305,25 @@ function TokenRow({ tok, expanded, onToggle }: { tok: DiagToken; expanded: boole
 }
 
 function TokenDetail({ tok }: { tok: DiagToken }) {
-  const dexUrl = `https://dexscreener.com/solana/${tok.mint}`;
+  const dexUrl  = `https://dexscreener.com/solana/${tok.mint}`;
+  const pumpUrl = `https://pump.fun/${tok.mint}`;
 
-  const filterRows = [
-    { label: 'Market Cap',      passed: tok.passed_mc_at,        at: tok.passed_mc_at },
-    { label: 'Liquidity',       passed: tok.passed_liquidity_at, at: tok.passed_liquidity_at },
-    { label: 'Volume',          passed: tok.passed_volume_at,    at: tok.passed_volume_at },
-    { label: 'Rugcheck',        passed: tok.passed_rugcheck_at,  at: tok.passed_rugcheck_at },
-    { label: 'Holder',          passed: tok.passed_holder_at,    at: tok.passed_holder_at },
-    { label: 'Creator',         passed: tok.passed_creator_at,   at: tok.passed_creator_at },
-    { label: 'Wallet Score',    passed: tok.passed_wallet_at,    at: tok.passed_wallet_at },
-    { label: 'Entry Criteria',  passed: tok.passed_entry_at,     at: tok.passed_entry_at },
-  ];
+  const currentMc  = tok.highest_mc ?? 0;
+  const currentLiq = tok.highest_liquidity ?? 0;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      {/* Left: market peaks */}
+      {/* Left Column */}
       <div>
-        <div style={{ ...C.label, marginBottom: 8 }}>Peak Market Data</div>
+        <div style={{ ...C.label, marginBottom: 8 }}>Strategy Metrics &amp; Market Peaks</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 10 }}>
           {[
-            ['Peak MC',          `$${fmtNum(tok.highest_mc)}`],
-            ['Peak Liquidity',   `$${fmtNum(tok.highest_liquidity)}`],
-            ['Peak Volume',      `$${fmtNum(tok.highest_volume)}`],
-            ['Peak Wallet Score', String(tok.highest_wallet_score ?? 0)],
-            ['Peak Qual. Wallets', String(tok.highest_qualifying_wallets ?? 0)],
-            ['Scans',            String(tok.scan_count)],
+            ['Highest MC',             `$${fmtNum(tok.highest_mc)}`],
+            ['Highest Liquidity',      `$${fmtNum(tok.highest_liquidity)}`],
+            ['RugCheck Safety',        tok.passed_rugcheck_at ? 'Passed ✅' : 'Failed / Pending ❌'],
+            ['Sustain Attempts',       `${tok.sustain_attempts ?? 0}×`],
+            ['Sustain Timer Started',  tok.sustain_started_at ? fmtTs(tok.sustain_started_at) : 'Not started'],
+            ['Last Reset Reason',      tok.last_reset_reason ?? 'None'],
           ].map(([l, v]) => (
             <div key={l}>
               <div style={{ color: C.gray, fontSize: 9 }}>{l}</div>
@@ -330,43 +331,47 @@ function TokenDetail({ tok }: { tok: DiagToken }) {
             </div>
           ))}
         </div>
-        <div style={{ marginTop: 10 }}>
-          <div style={{ ...C.label, marginBottom: 4 }}>Source / Discovery</div>
-          <span style={{ fontSize: 10, color: C.blue, fontWeight: 700 }}>{tok.discovery_source}</span>
-          <span style={{ fontSize: 9, color: C.gray }}> · first seen {timeAgo(tok.first_seen_at)}</span>
+        <div style={{ marginTop: 10, display: 'flex', gap: 10 }}>
+          <a href={dexUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 9, color: C.accent, textDecoration: 'none', fontWeight: 700 }}>↗ View on DexScreener</a>
+          <a href={pumpUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 9, color: C.pump, textDecoration: 'none', fontWeight: 700 }}>↗ View on Pump.fun</a>
         </div>
-        <div style={{ marginTop: 8 }}>
-          <a href={dexUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 9, color: C.yellow, textDecoration: 'none', fontWeight: 700 }}>↗ View on DexScreener</a>
-          <span style={{ fontSize: 9, color: C.gray, display: 'block', fontFamily: 'monospace', marginTop: 2 }}>{tok.mint.slice(0, 20)}…</span>
+        <div style={{ fontSize: 8, color: C.gray, fontFamily: 'monospace', marginTop: 4 }}>
+          CA: {tok.mint}
         </div>
       </div>
 
-      {/* Right: filter pass/fail */}
+      {/* Right Column */}
       <div>
-        <div style={{ ...C.label, marginBottom: 8 }}>Filter Pipeline</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {filterRows.map(r => (
-            <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10 }}>
-              <FilterPass passed={r.passed != null ? true : null} />
-              <span style={{ color: r.passed ? C.text : C.gray, flex: 1 }}>{r.label}</span>
-              {r.at && <span style={{ color: C.gray, fontSize: 9 }}>{fmtTs(r.at)}</span>}
-            </div>
-          ))}
+        <div style={{ ...C.label, marginBottom: 8 }}>Progression Status</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterPass passed={tok.passed_rugcheck_at != null} />
+            <span>RugCheck Filter (Freeze Authority / Top Holders)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterPass passed={currentMc >= 30000} />
+            <span>Market Cap Threshold ≥ $30,000 (Current: ${fmtNum(currentMc)})</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterPass passed={currentLiq >= 15000} />
+            <span>Liquidity Threshold ≥ $15,000 (Current: ${fmtNum(currentLiq)})</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterPass passed={tok.status === 'SUSTAIN_COMPLETED' || tok.status === 'TRADE_ELIGIBLE' || tok.status === 'TRADED'} />
+            <span>10-Minute Continuous Sustain Gate</span>
+          </div>
         </div>
-        {tok.reject_reason && (
-          <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: 'rgba(255,68,102,0.08)', border: '1px solid rgba(255,68,102,0.2)' }}>
-            <div style={{ fontSize: 9, color: C.red, fontWeight: 800 }}>REJECTION REASON</div>
-            <div style={{ fontSize: 10, color: '#ffaaaa', marginTop: 2 }}>{tok.reject_reason}</div>
+
+        {tok.last_reset_reason && (
+          <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 6, background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.2)' }}>
+            <div style={{ fontSize: 9, color: C.orange, fontWeight: 800 }}>LAST SUSTAIN RESET</div>
+            <div style={{ fontSize: 9, color: '#ffe6b3', marginTop: 2 }}>{tok.last_reset_reason}</div>
           </div>
         )}
-        {tok.status === 'TRADED' && tok.entry_mode && (
-          <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.18)' }}>
-            <div style={{ fontSize: 9, color: C.green, fontWeight: 800 }}>TRADE DETAILS</div>
-            <div style={{ fontSize: 10, color: '#aaffcc', marginTop: 2 }}>
-              {tok.entry_mode === 'consensus' ? `Consensus (${tok.entry_qualifying_wallets} wallets ≥80)` : `Entry mode: ${tok.entry_mode ?? 'unknown'}`}
-              {tok.entry_price != null && <><br />{`Entry: $${tok.entry_price.toFixed(8)}`}</>}
-              {tok.entry_mc != null && <><br />{`MC: $${fmtNum(tok.entry_mc)}`}</>}
-            </div>
+        {tok.reject_reason && (
+          <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 6, background: 'rgba(255,68,102,0.08)', border: '1px solid rgba(255,68,102,0.2)' }}>
+            <div style={{ fontSize: 9, color: C.red, fontWeight: 800 }}>REJECTION REASON</div>
+            <div style={{ fontSize: 9, color: '#ffaaaa', marginTop: 2 }}>{tok.reject_reason}</div>
           </div>
         )}
       </div>

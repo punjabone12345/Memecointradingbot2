@@ -267,6 +267,10 @@ export async function initDB(): Promise<void> {
     `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS validation_outcome         TEXT`,
     `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS rediscovery_count         INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS initial_reserve_usd       NUMERIC`,
+    `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS sustain_started_at        BIGINT`,
+    `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS sustain_attempts          INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS last_reset_reason         TEXT`,
+    `ALTER TABLE IF EXISTS diag_tokens ADD COLUMN IF NOT EXISTS expires_at                 BIGINT`,
   ];
 
   for (const sql of migrations) {
@@ -280,17 +284,19 @@ export async function initDB(): Promise<void> {
 
   // Seed settings — DO NOTHING so user changes are preserved
   const seedDefaults: [string, string][] = [
-    ['minMc', '500000'],
-    ['maxMc', '7000000'],
-    ['minVolume24h', '100000'],
+    ['minMc', '30000'],
+    ['maxMc', '5000000'],
+    ['minVolume24h', '15000'],
     ['minAgeHours', '0'],
     ['maxAgeHours', '720'],
     ['scanFrequencyMs', '15000'],
     ['minBuySellRatio', '1.1'],
     ['maxTopHolder', '25'],
     ['maxCreatorPct', '15'],
-    ['minLiquidity', '25000'],
-    ['rugcheckEnabled', 'false'],
+    ['minLiquidity', '15000'],
+    ['sustainDurationSec', '600'],
+    ['maxTrackingDurationMin', '120'],
+    ['rugcheckEnabled', 'true'],
     ['minEntryScore', '50'],
     ['trendChecksRequired', '2'],
     ['maxOpenPositions', '5'],
@@ -323,7 +329,7 @@ export async function initDB(): Promise<void> {
     ['wt3Tp2Pct', '350'],  ['wt3Tp2Exit', '30'],  ['wt3Tp2Trail', '20'],
     ['wt3Tp3Pct', '550'],  ['wt3Tp3Exit', '30'],  ['wt3Tp3Trail', '10'],
     // Trading window
-    ['tradingWindowEnabled', 'true'],
+    ['tradingWindowEnabled', 'false'],
     ['tradingWindowStart', '17:00'],
     ['tradingWindowEnd', '00:00'],
   ];
@@ -339,21 +345,13 @@ export async function initDB(): Promise<void> {
   // Uses exact-old-value guards so user edits above the threshold are preserved.
   const forceMigrations: [string, string, string][] = [
     // [key, old-value, new-value]
-    ['minLiquidity',   '20000',   '25000'],  // raised liquidity floor
+    ['minLiquidity',   '25000',   '15000'],  // updated strategy liquidity floor
+    ['minLiquidity',   '20000',   '15000'],
+    ['minMc',          '50000',   '30000'],  // updated strategy MC floor
+    ['minMc',          '500000',  '30000'],
     ['slPct',          '25',      '20'],     // reduced hard SL
     ['sizeScore80',    '0.75',    '1'],      // flat sizing: remove score tiers
     ['sizeScore70',    '0.5',     '1'],      // flat sizing: remove score tiers
-    // ── v2: fix factory defaults that were too strict for fresh graduation events ──
-    // PumpFun tokens graduate at ~$69K MC; minMc=$500K blocked 100% of them.
-    // minVolume24h=$100K blocked tokens seconds after graduation (24h vol is tiny).
-    // Only migrate if still at the bad default — user edits above these are kept.
-    ['minMc',          '500000',  '50000'],  // $500K → $50K: catches $69K graduation MC
-    ['maxMc',          '7000000', '5000000'],// $7M  → $5M : focus on small-mid caps
-    ['minVolume24h',   '100000',  '15000'],  // $100K→ $15K: fresh tokens have low 24h vol
-    ['maxAgeHours',    '720',     '48'],     // 30 days → 48h: ignore stale tokens
-    // ── v3: trading window disabled — bot runs 24/7 ──
-    // Old default was 'true' (restricted to 17:00–00:00 IST).
-    // Force off so the bot operates around the clock on all environments.
     ['tradingWindowEnabled', 'true', 'false'],
   ];
   for (const [key, oldVal, newVal] of forceMigrations) {

@@ -230,286 +230,139 @@ function PctBadge({ value, label }: { value?: number; label: string }) {
 
 // ── TrackedCard ───────────────────────────────────────────────────────────────
 
+function countdownSustain(sustainStartedAt?: number | null, sustainDurationSec = 600): { text: string; pct: number } {
+  if (!sustainStartedAt) return { text: '0:00 / 10:00', pct: 0 };
+  const elapsedSec = Math.floor((Date.now() - sustainStartedAt) / 1000);
+  const curMin = Math.floor(elapsedSec / 60);
+  const curSec = elapsedSec % 60;
+  const targetMin = Math.floor(sustainDurationSec / 60);
+  const text = `${curMin}:${String(curSec).padStart(2, '0')} / ${targetMin}:00`;
+  const pct = Math.min(100, (elapsedSec / sustainDurationSec) * 100);
+  return { text, pct };
+}
+
 function TrackedCard({ tok, tick }: { tok: TrackedToken; tick: number }) {
   void tick;
-  const pct        = countdownPct(tok.migrationTime, tok.expiresAt);
-  const remaining  = countdown(tok.expiresAt);
-  const expired    = tok.expiresAt <= Date.now();
-  const biggestBuy = tok.buyerActivity.reduce((max, b) => b.amountUsd > max ? b.amountUsd : max, 0);
-  const hasMarket  = (tok.price ?? 0) > 0;
+  const firstSeen   = tok.firstDiscoveredAt || tok.migrationTime || Date.now();
+  const expiresAt   = tok.expiresAt || (firstSeen + 2 * 3600 * 1000);
+  const pctTracking = countdownPct(firstSeen, expiresAt);
+  const remaining   = countdown(expiresAt);
+  const expired     = expiresAt <= Date.now();
+  const hasMarket   = (tok.price ?? 0) > 0;
+
+  const currentMc   = tok.mcap ?? 0;
+  const currentLiq  = tok.liquidity ?? 0;
+  const mcOk        = currentMc >= 30000;
+  const liqOk       = currentLiq >= 15000;
+  const bothMet     = mcOk && liqOk;
+
+  const status      = tok.status ?? (tok.entryTriggered ? 'TRADED' : bothMet ? 'SUSTAINING' : 'WAITING_FOR_THRESHOLDS');
+  const sustain     = countdownSustain(tok.sustainStartedAt);
+
+  const statusColor = status === 'TRADED' || status === 'TRADE_ELIGIBLE' || status === 'SUSTAIN_COMPLETED' ? C.green
+    : status === 'SUSTAINING' ? C.yellow
+    : status === 'SUSTAIN_RESET' ? C.orange
+    : status === 'REJECTED' ? C.red
+    : status === 'EXPIRED' ? C.gray
+    : C.accent;
 
   return (
     <div style={{
-      ...C.card, marginBottom: 8,
-      borderColor: tok.entryTriggered ? 'rgba(0,255,136,0.25)' : biggestBuy >= 750 ? 'rgba(0,191,255,0.3)' : 'rgba(255,255,255,0.07)',
+      ...C.card, marginBottom: 10,
+      borderColor: status === 'TRADED' || status === 'TRADE_ELIGIBLE' ? 'rgba(0,255,136,0.3)' : status === 'SUSTAINING' ? 'rgba(255,215,0,0.3)' : 'rgba(255,255,255,0.07)',
     }}>
+      {/* Top Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 13, fontWeight: 900, color: '#e0e8ff' }}>{tok.symbol}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 14, fontWeight: 900, color: '#e0e8ff' }}>{tok.symbol}</span>
             <span style={{ fontSize: 9, color: C.gray }}>{tok.name}</span>
-            {tok.entryTriggered && (
-              <span style={{ fontSize: 8, fontWeight: 800, padding: '2px 6px', borderRadius: 4, background: 'rgba(0,255,136,0.12)', color: C.green, border: '1px solid rgba(0,255,136,0.3)' }}>ENTERED</span>
+            <span style={{ fontSize: 8, fontWeight: 800, padding: '2px 6px', borderRadius: 4, background: `${statusColor}18`, color: statusColor, border: `1px solid ${statusColor}44` }}>
+              {status}
+            </span>
+            {tok.rugcheckPassed != null && (
+              <span style={{ fontSize: 8, fontWeight: 800, padding: '2px 5px', borderRadius: 4, background: tok.rugcheckPassed ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,102,0.1)', color: tok.rugcheckPassed ? C.green : C.red, border: `1px solid ${tok.rugcheckPassed ? 'rgba(0,255,136,0.25)' : 'rgba(255,68,102,0.25)'}` }}>
+                RugCheck: {tok.rugcheckPassed ? 'PASSED ✅' : 'FAILED ❌'}
+              </span>
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
             <span style={{ fontSize: 9, color: C.gray, fontFamily: 'monospace' }}>{shortAddr(tok.mint)}</span>
             <DexLink mint={tok.mint} />
+            <PumpLink mint={tok.mint} />
           </div>
         </div>
+
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 13, fontWeight: 900, fontVariantNumeric: 'tabular-nums', color: expired ? C.red : pct > 80 ? C.yellow : '#00d4ff' }}>
+          <div style={{ fontSize: 12, fontWeight: 900, fontVariantNumeric: 'tabular-nums', color: expired ? C.red : pctTracking > 80 ? C.yellow : '#00d4ff' }}>
             {remaining}
           </div>
-          <div style={{ fontSize: 8, color: C.gray }}>remaining</div>
+          <div style={{ fontSize: 8, color: C.gray }}>2h window remaining</div>
         </div>
       </div>
 
-      {hasMarket ? (
-        <div style={{ margin: '10px 0 6px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, padding: '8px 10px', borderRadius: '8px 8px 0 0', background: 'rgba(0,191,255,0.04)', border: '1px solid rgba(0,191,255,0.08)', borderBottom: 'none' }}>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, fontWeight: 800, color: '#e0e8ff', fontVariantNumeric: 'tabular-nums' }}>{fmtPrice(tok.price)}</div>
-              <div style={{ fontSize: 8, color: C.gray }}>price</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, fontWeight: 800, color: '#e0e8ff' }}>${fmtCompact(tok.mcap)}</div>
-              <div style={{ fontSize: 8, color: C.gray }}>mcap</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, fontWeight: 800, color: '#e0e8ff' }}>${fmtCompact(tok.liquidity)}</div>
-              <div style={{ fontSize: 8, color: C.gray }}>liquidity</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 10, fontWeight: 800, color: '#e0e8ff' }}>${fmtCompact(tok.volume24h ?? tok.volume1h ?? tok.volume5m)}</div>
-              <div style={{ fontSize: 8, color: C.gray }}>{tok.volume24h != null ? 'vol 24h' : tok.volume1h != null ? 'vol 1h' : 'vol 5m'}</div>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, padding: '6px 10px', borderRadius: '0 0 8px 8px', background: 'rgba(0,191,255,0.02)', border: '1px solid rgba(0,191,255,0.08)' }}>
-            <PctBadge value={tok.priceChange5m} label="5m chg" />
-            <PctBadge value={tok.priceChange1h} label="1h chg" />
-            <PctBadge value={tok.priceChange24h} label="24h chg" />
-            <div style={{ textAlign: 'center' }}>
-              {(tok.txnsH24Buys ?? 0) > 0 || (tok.txnsH24Sells ?? 0) > 0 ? (
-                <>
-                  <div style={{ fontSize: 9, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
-                    <span style={{ color: C.green }}>{tok.txnsH24Buys ?? 0}B</span>
-                    <span style={{ color: C.gray }}> / </span>
-                    <span style={{ color: C.red }}>{tok.txnsH24Sells ?? 0}S</span>
-                  </div>
-                  <div style={{ fontSize: 8, color: C.gray }}>txns 24h</div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 9, color: C.gray }}>{tok.lastMarketUpdate ? timeAgo(tok.lastMarketUpdate) : '—'}</div>
-                  <div style={{ fontSize: 8, color: C.gray }}>updated</div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{ fontSize: 9, color: C.gray, margin: '8px 0 4px', fontStyle: 'italic' }}>Fetching market data…</div>
-      )}
-
-      <div style={{ margin: '6px 0 6px', height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: expired ? C.red : pct > 80 ? `linear-gradient(90deg,${C.yellow},${C.red})` : `linear-gradient(90deg,${C.accent},#7b5ea7)`, transition: 'width 1s linear' }} />
-      </div>
-
-      {tok.buyerActivity.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-          {tok.buyerActivity.slice(0, 5).map((b, i) => (
-            <span key={i} style={{ fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 4, background: b.amountUsd >= 2250 ? 'rgba(0,191,255,0.18)' : b.amountUsd >= 1500 ? 'rgba(0,191,255,0.11)' : 'rgba(0,191,255,0.06)', color: C.accent, border: '1px solid rgba(0,191,255,0.2)' }}>
-              📈 {fmtUsd(b.amountUsd)} · {timeAgo(b.detectedAt ?? b.timestamp)}
+      {/* Threshold Status Bar */}
+      <div style={{ margin: '10px 0 8px', padding: '8px 12px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ display: 'flex', gap: 12, fontSize: 10 }}>
+            <span style={{ fontWeight: 800, color: mcOk ? C.green : C.red }}>
+              {mcOk ? '✓' : '✗'} MC: ${fmtCompact(currentMc)} <span style={{ color: C.gray, fontWeight: 400 }}>(min $30K)</span>
             </span>
-          ))}
-        </div>
-      )}
-      {!hasMarket && tok.buyerActivity.length === 0 && (
-        <div style={{ fontSize: 9, color: C.gray }}>Monitoring wallet activity…</div>
-      )}
-    </div>
-  );
-}
-
-function BuyerActivityRow({ entry }: { entry: BuyerActivityLog }) {
-  const [expanded, setExpanded] = useState(false);
-  const score = entry.walletScore;
-  const scoreColor = score == null ? C.gray : score >= 95 ? C.green : score >= 80 ? C.accent : C.gray;
-  const modeLabel = entry.consensusMode === 'consensus' ? 'CONSENSUS'
-    : entry.consensusMode === 'tracking' ? `${entry.qualifyingWalletsCount ?? 0}/2 QUALIFYING`
-    : null;
-  const gmgn = entry.gmgnScore;
-  const pts = gmgn?.scorePoints ?? { winRate: 0, walletAge: 0, completedTrades: 0, roi: 0, holdTime: 0 };
-  const solscanWallet = `https://solscan.io/account/${entry.wallet}`;
-  const solscanTx = entry.txSig ? `https://solscan.io/tx/${entry.txSig}` : null;
-
-  return (
-    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <div 
-        onClick={() => setExpanded(!expanded)}
-        style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', cursor: 'pointer', userSelect: 'none' }}
-      >
-        <div style={{ flexShrink: 0, marginTop: 1, width: 34, height: 34, borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: `rgba(${score != null && score >= 95 ? '0,255,136' : score != null && score >= 80 ? '0,191,255' : '255,255,255'},0.1)`, border: `1px solid ${scoreColor}55` }}>
-          <span style={{ fontSize: 12, fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{score ?? '—'}</span>
-          <span style={{ fontSize: 6, color: C.gray, lineHeight: 1 }}>GMGN</span>
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 900, color: C.accent }}>{fmtUsd(entry.amountUsd)}</span>
-            <span style={{ fontSize: 10, color: '#e0e8ff', fontWeight: 700 }}>{entry.txType === 'sell' ? 'sell on' : 'buy on'} {entry.symbol}</span>
-            <DexLink mint={entry.mint} />
-            {modeLabel && (
-              <span style={{ fontSize: 8, fontWeight: 800, padding: '1px 5px', borderRadius: 3, background: 'rgba(155,89,255,0.12)', color: '#9b59ff', border: '1px solid rgba(155,89,255,0.3)' }}>{modeLabel}</span>
-            )}
-            {entry.entered ? (
-              <span style={{ fontSize: 8, fontWeight: 800, padding: '1px 5px', borderRadius: 3, background: 'rgba(0,255,136,0.12)', color: C.green, border: '1px solid rgba(0,255,136,0.25)' }}>ENTERED</span>
-            ) : (
-              <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.04)', color: C.gray }}>{entry.skipReason ?? 'skipped'}</span>
-            )}
+            <span style={{ fontWeight: 800, color: liqOk ? C.green : C.red }}>
+              {liqOk ? '✓' : '✗'} Liq: ${fmtCompact(currentLiq)} <span style={{ color: C.gray, fontWeight: 400 }}>(min $15K)</span>
+            </span>
           </div>
-          <div style={{ fontSize: 8, color: C.gray, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>{shortAddr(entry.wallet)} · {timeAgo(entry.detectedAt ?? entry.timestamp)}</span>
-            <span style={{ color: C.accent, fontWeight: 700 }}>{expanded ? '▲ Details' : '▼ Details'}</span>
-          </div>
+          {tok.sustainAttempts ? (
+            <span style={{ fontSize: 8, color: C.gray }}>Attempts: {tok.sustainAttempts}×</span>
+          ) : null}
         </div>
+
+        {/* Sustain Progress Bar */}
+        {status === 'SUSTAINING' || tok.sustainStartedAt ? (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 3 }}>
+              <span style={{ color: C.yellow, fontWeight: 800 }}>⏱ 10-Minute Sustain Timer Running</span>
+              <span style={{ color: '#e0e8ff', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{sustain.text}</span>
+            </div>
+            <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+              <div style={{ width: `${sustain.pct}%`, height: '100%', borderRadius: 3, background: 'linear-gradient(90deg, #ffd700, #00ff88)', transition: 'width 1s linear' }} />
+            </div>
+          </div>
+        ) : status === 'SUSTAIN_RESET' ? (
+          <div style={{ fontSize: 9, color: C.orange, fontStyle: 'italic' }}>
+            🔄 Sustain timer reset: {tok.lastResetReason ?? 'Threshold dropped below minimum'}
+          </div>
+        ) : status === 'TRADE_ELIGIBLE' || status === 'SUSTAIN_COMPLETED' ? (
+          <div style={{ fontSize: 9, color: C.green, fontWeight: 800 }}>
+            ✅ Sustained $30K MC + $15K Liq for 10 continuous mins — Trade Eligible!
+          </div>
+        ) : status === 'REJECTED' ? (
+          <div style={{ fontSize: 9, color: C.red }}>
+            ❌ Rejected by safety filters — tracking stopped.
+          </div>
+        ) : status === 'EXPIRED' ? (
+          <div style={{ fontSize: 9, color: C.gray }}>
+            ⏰ 2-hour tracking window exceeded without trade eligibility.
+          </div>
+        ) : (
+          <div style={{ fontSize: 9, color: C.gray }}>
+            ⏳ Waiting for both $30K MC and $15K Liquidity to be reached simultaneously…
+          </div>
+        )}
       </div>
 
-      {expanded && (
-        <div style={{ padding: '8px 12px 12px', marginBottom: 6, borderRadius: 8, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.06)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div>
-            <div style={{ ...C.label, marginBottom: 6 }}>Transaction Info</div>
-            <div style={{ fontSize: 9, color: C.gray, lineHeight: 1.8 }}>
-              <div>Type: <b style={{ color: entry.txType === 'sell' ? C.accent : C.green }}>{(entry.txType ?? 'buy').toUpperCase()}</b></div>
-              <div>Amount: <b style={{ color: '#dce6f8' }}>{fmtUsd(entry.amountUsd)}</b></div>
-              {entry.priceAtDetection ? <div>Price at Detection: <b style={{ color: '#dce6f8' }}>{fmtPrice(entry.priceAtDetection)}</b></div> : null}
-              <div>Wallet: <a href={solscanWallet} target="_blank" rel="noopener noreferrer" style={{ color: C.accent }}>{entry.wallet}</a></div>
-              {solscanTx ? <div>Signature: <a href={solscanTx} target="_blank" rel="noopener noreferrer" style={{ color: C.accent }}>{entry.txSig.slice(0, 12)}…{entry.txSig.slice(-6)}</a></div> : null}
-              <div>Source: <b style={{ color: '#dce6f8' }}>{gmgn?.scoreSource ?? 'gmgn'} · {gmgn?.scoreStatus ?? 'scored'}</b></div>
-            </div>
-            <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 6, background: entry.entered ? 'rgba(0,255,136,0.07)' : 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-              <div style={{ ...C.label, color: entry.entered ? C.green : C.gray }}>Decision Reason</div>
-              <div style={{ marginTop: 3, color: '#dce6f8', fontSize: 9, lineHeight: 1.35 }}>{entry.skipReason ?? (entry.entered ? 'Qualified for entry' : 'Skipped')}</div>
-            </div>
+      {/* Market metrics */}
+      {hasMarket && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.02)' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#e0e8ff' }}>{fmtPrice(tok.price)}</div>
+            <div style={{ fontSize: 8, color: C.gray }}>price</div>
           </div>
-
-          <div>
-            <div style={{ ...C.label, marginBottom: 6 }}>GMGN Score Calculation</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <ScoreMetric label="Win rate (>60%)" value={gmgn?.winRate == null ? 'not available' : `${(Number(gmgn.winRate) * 100).toFixed(1)}%`} points={pts.winRate ?? 0} max={30} />
-              <ScoreMetric label="Wallet age (>10d)" value={gmgn?.walletAgeDays == null ? 'not calculated' : `${Number(gmgn.walletAgeDays).toFixed(1)} days`} points={pts.walletAge ?? 0} max={15} />
-              <ScoreMetric label="Completed trades (>=20)" value={gmgn?.completedTrades == null ? 'not available' : String(gmgn.completedTrades)} points={pts.completedTrades ?? 0} max={15} />
-              <ScoreMetric label="Average ROI (>30%)" value={gmgn?.avgRoiPct == null ? 'not available' : `${Number(gmgn.avgRoiPct).toFixed(1)}%`} points={pts.roi ?? 0} max={25} />
-              <ScoreMetric label="Average hold (>2m)" value={gmgn?.avgHoldMinutes == null ? 'not available' : `${Number(gmgn.avgHoldMinutes).toFixed(1)} min`} points={pts.holdTime ?? 0} max={15} />
-            </div>
-            <div style={{ marginTop: 8, color: C.gray, fontSize: 8, lineHeight: 1.3 }}>
-              Total Score: <b style={{ color: scoreColor }}>{score ?? 0}/100</b> (≥80 required for wallet consensus).
-            </div>
-          </div>
+          <PctBadge value={tok.priceChange5m} label="5m chg" />
+          <PctBadge value={tok.priceChange1h} label="1h chg" />
+          <PctBadge value={tok.priceChange24h} label="24h chg" />
         </div>
       )}
-    </div>
-  );
-}
-
-function ScoreMetric({ label, value, points, max }: { label: string; value: string; points: number; max: number }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: 6, alignItems: 'center', fontSize: 8 }}>
-      <span style={{ color: C.gray }}>{label}</span>
-      <span style={{ color: '#b9c8e4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
-      <span style={{ color: points > 0 ? C.green : C.gray, fontWeight: 800 }}>+{points}/{max}</span>
-    </div>
-  );
-}
-
-function TransactionAuditRow({ tx, expanded, onToggle }: { tx: DiagTransaction; expanded: boolean; onToggle: () => void }) {
-  const score = Number(tx.wallet_score ?? 0);
-  const points = tx.score_points ?? {};
-  const decisionColor = tx.decision === 'ENTERED' ? C.green
-    : tx.decision === 'SELL_OBSERVED' ? C.accent
-    : tx.decision === 'WAITING_CONSENSUS' || tx.decision === 'QUEUED' ? C.yellow
-    : tx.decision === 'GMGN_RATE_LIMITED' ? C.yellow : C.red;
-  const txTime = Number(tx.detected_at || tx.created_at);
-  const solscanTx = `https://solscan.io/tx/${tx.tx_signature}`;
-  const solscanWallet = `https://solscan.io/account/${tx.wallet}`;
-  return (
-    <div style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-      <button onClick={onToggle} style={{ width: '100%', display: 'grid', gridTemplateColumns: '58px 1fr auto', gap: 8, alignItems: 'center', textAlign: 'left', padding: '8px 0', color: '#dce6f8', background: 'transparent', border: 'none', cursor: 'pointer' }}>
-        <span style={{ color: decisionColor, fontSize: 8, fontWeight: 900 }}>{tx.tx_type.toUpperCase()}<br /><span style={{ color: C.gray, fontWeight: 500 }}>{timeAgo(txTime)}</span></span>
-        <span style={{ minWidth: 0 }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{ color: '#e0e8ff', fontWeight: 800, fontSize: 10 }}>{tx.mint.slice(0, 6)}…{tx.mint.slice(-4)}</span>
-            <span style={{ color: decisionColor, fontWeight: 900, fontSize: 9 }}>{tx.decision}</span>
-            <span style={{ color: C.gray, fontSize: 8 }}>{tx.decision_reason}</span>
-          </span>
-          <span style={{ display: 'block', marginTop: 2, color: C.gray, fontSize: 8, fontFamily: 'monospace' }}>{tx.wallet.slice(0, 8)}…{tx.wallet.slice(-6)} · {tx.tx_signature.slice(0, 10)}…</span>
-        </span>
-        <span style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-          <span style={{ display: 'block', color: score >= 80 ? C.green : score > 0 ? C.yellow : C.gray, fontSize: 14, fontWeight: 900 }}>{score}</span>
-          <span style={{ color: C.gray, fontSize: 7 }}>GMGN /100</span>
-        </span>
-      </button>
-      {expanded && (
-        <div style={{ padding: '6px 10px 12px', marginBottom: 4, borderRadius: 7, background: 'rgba(0,0,0,0.16)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div>
-            <div style={{ ...C.label, marginBottom: 6 }}>Transaction Detail</div>
-            <div style={{ fontSize: 9, color: C.gray, lineHeight: 1.8 }}>
-              <div>Amount: <b style={{ color: '#dce6f8' }}>{fmtUsd(Number(tx.amount_usd ?? 0))}</b></div>
-              <div>Price: <b style={{ color: '#dce6f8' }}>{fmtPrice(Number(tx.price_at_detection ?? 0))}</b></div>
-              <div>Wallet: <a href={solscanWallet} target="_blank" rel="noopener noreferrer" style={{ color: C.accent }}>{tx.wallet}</a></div>
-              <div>Signature: <a href={solscanTx} target="_blank" rel="noopener noreferrer" style={{ color: C.accent }}>{tx.tx_signature}</a></div>
-              <div>Source: <b style={{ color: '#dce6f8' }}>{tx.score_source} · {tx.score_status}</b></div>
-            </div>
-            <div style={{ marginTop: 8, padding: '7px 8px', borderRadius: 5, background: tx.decision === 'ENTERED' ? 'rgba(0,255,136,0.07)' : 'rgba(255,68,102,0.07)', border: `1px solid ${decisionColor}33` }}>
-              <div style={{ ...C.label, color: decisionColor }}>Decision Explanation</div>
-              <div style={{ marginTop: 3, color: '#dce6f8', fontSize: 9, lineHeight: 1.35 }}>{tx.decision_reason}</div>
-            </div>
-          </div>
-          <div>
-            <div style={{ ...C.label, marginBottom: 6 }}>GMGN Score Calculation</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <ScoreMetric label="Win rate" value={tx.win_rate == null ? 'not available' : `${(Number(tx.win_rate) * 100).toFixed(1)}%`} points={Number(points.winRate ?? 0)} max={30} />
-              <ScoreMetric label="Wallet age" value={tx.wallet_age_days == null ? 'not queried' : `${Number(tx.wallet_age_days).toFixed(1)} days`} points={Number(points.walletAge ?? 0)} max={15} />
-              <ScoreMetric label="Completed trades" value={tx.completed_trades == null ? 'not available' : String(tx.completed_trades)} points={Number(points.completedTrades ?? 0)} max={15} />
-              <ScoreMetric label="Average ROI" value={tx.avg_roi_pct == null ? 'not available' : `${Number(tx.avg_roi_pct).toFixed(1)}%`} points={Number(points.roi ?? 0)} max={25} />
-              <ScoreMetric label="Average hold" value={tx.avg_hold_minutes == null ? 'not available' : `${Number(tx.avg_hold_minutes).toFixed(1)} min`} points={Number(points.holdTime ?? 0)} max={15} />
-            </div>
-            <div style={{ marginTop: 7, color: C.gray, fontSize: 8 }}>Threshold: score ≥80 qualifies; two distinct qualifying wallets within 5 minutes are required for consensus.</div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TransactionAuditPanel({ since }: { since?: number }) {
-  const [rows, setRows] = useState<DiagTransaction[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const result = await api.getDiagTransactions({ limit: 100, since });
-        if (!cancelled) { setRows(result.rows); setTotal(result.total); }
-      } catch { /* API may be unavailable while it restarts */ }
-      finally { if (!cancelled) setLoading(false); }
-    };
-    load();
-    const id = setInterval(load, 5_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [since]);
-
-  return (
-    <div style={{ ...C.card, marginBottom: 16 }}>
-      <div style={{ ...C.label, marginBottom: 2 }}>🧾 TRANSACTION AUDIT — GMGN DECISIONS</div>
-      <div style={{ fontSize: 9, color: '#2a3a50', marginBottom: 8 }}>Every detected buy and sell is scored through GMGN. Expand a row for wallet, signature, rejection explanation, and point-by-point score calculation.</div>
-      {loading && rows.length === 0 ? <div style={{ padding: 16, textAlign: 'center', color: C.gray, fontSize: 10 }}>Loading transaction audit…</div>
-        : rows.length === 0 ? <div style={{ padding: 16, textAlign: 'center', color: C.gray, fontSize: 10 }}>No transactions audited yet</div>
-        : <div>{rows.map(tx => <TransactionAuditRow key={tx.tx_signature} tx={tx} expanded={expanded === tx.tx_signature} onToggle={() => setExpanded(expanded === tx.tx_signature ? null : tx.tx_signature)} />)}</div>}
-      {total > rows.length && <div style={{ paddingTop: 7, color: C.gray, fontSize: 8, textAlign: 'center' }}>Showing latest {rows.length} of {total} audited transactions</div>}
     </div>
   );
 }
@@ -587,7 +440,7 @@ function MigrationFeed() {
           {statusLabel}
         </span>
         <span style={{ fontSize: 9, color: C.gray, marginLeft: 'auto' }}>
-          {total} total{tokensPerHour != null && ` · ${tokensPerHour}/hr`}
+          {total} total
         </span>
       </div>
 
@@ -624,23 +477,8 @@ function MigrationFeed() {
               {lastAgoSec == null ? 'never' : `${lastAgoSec}s ago`}
             </span>
           </div>
-          {txErrRate > 0 && (
-            <>
-              <div style={{ width: 1, background: 'rgba(255,255,255,0.07)', alignSelf: 'stretch' }} />
-              <div>
-                <div style={{ fontSize: 8, color: C.gray, marginBottom: 2 }}>TX ERR</div>
-                <span style={{ fontSize: 9, color: txErrRate > 20 ? C.red : C.yellow, fontVariantNumeric: 'tabular-nums' }}>{txErrRate}%</span>
-              </div>
-            </>
-          )}
         </div>
 
-        {/* Error / warning banners */}
-        {!heliusSet && (
-          <div style={{ marginTop: 8, fontSize: 9, color: C.yellow, padding: '5px 8px', borderRadius: 6, background: 'rgba(255,200,0,0.07)', border: '1px solid rgba(255,200,0,0.18)' }}>
-            ⚠ HELIUS_API_KEY not set — using public RPC. Higher latency &amp; rate limits. Set HELIUS_API_KEY on Render for reliable tracking.
-          </div>
-        )}
         {failures > 0 && lastError && (
           <div style={{ marginTop: 8, fontSize: 9, color: failures > 3 ? C.red : C.yellow, padding: '5px 8px', borderRadius: 6, background: failures > 3 ? 'rgba(255,68,68,0.07)' : 'rgba(255,200,0,0.07)', border: `1px solid ${failures > 3 ? 'rgba(255,68,68,0.2)' : 'rgba(255,200,0,0.2)'}` }}>
             {failures > 3 ? '⛔' : '⚠'} {lastError} ({failures} consecutive failures)
@@ -664,9 +502,6 @@ function MigrationFeed() {
               : pollCount === 0
               ? 'Waiting for first poll…'
               : 'No migrations detected yet — watching wallet'}
-            <div style={{ fontSize: 9, color: '#2a3a50', marginTop: 6 }}>
-              Tracking {walletAddr.slice(0, 8)}…{walletAddr.slice(-6)}
-            </div>
           </div>
         ) : (
           events.slice(0, 15).map((ev, i) => (
@@ -691,21 +526,17 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
   }, []);
 
   const now      = Date.now();
-  const tracked  = (status?.trackedTokens ?? []).filter(t => t.expiresAt > now || t.entryTriggered);
-  const buyLogs  = status?.recentBuyLog ?? [];
-  const queued   = status?.queuedSignals ?? [];
-  const stats    = status?.stats ?? { tracking: 0, positions: 0, queued: 0, pending: 0 };
-  const gmgnConfigured  = status?.gmgnConfigured ?? true;
-  const gmgnBannedUntil = status?.gmgnBannedUntil ?? 0;
+  const tracked  = (status?.trackedTokens ?? []).filter(t => (t.expiresAt ?? 0) > now || t.entryTriggered || t.sustainStartedAt);
+  const stats    = status?.stats as any ?? {};
 
   return (
     <div>
-      {/* ── Sniper Engine header ── */}
+      {/* ── Strategy Header ── */}
       <div style={{ ...C.card, marginBottom: 16, background: 'linear-gradient(135deg,rgba(0,191,255,0.06),rgba(123,94,167,0.06))', borderColor: 'rgba(0,191,255,0.2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 900, color: C.accent, letterSpacing: '0.04em' }}>🎯 SNIPER ENGINE</div>
-            <div style={{ fontSize: 9, color: C.gray, marginTop: 2 }}>Pump.fun migration wallet · Smart Wallet Consensus</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: C.accent, letterSpacing: '0.04em' }}>🚀 MIGRATED TOKEN STRATEGY</div>
+            <div style={{ fontSize: 9, color: C.gray, marginTop: 2 }}>Pump.fun Migrations · $30K MC + $15K Liquidity · 10-Min Sustain Gate</div>
           </div>
           <div style={{ textAlign: 'right', fontSize: 9, color: C.gray }}>
             SOL<br />
@@ -713,45 +544,29 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
           </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-around', padding: '10px 0', borderTop: '1px solid rgba(255,255,255,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)', margin: '0 -2px' }}>
-          <StatPill label="Pending"    value={stats.pending ?? 0}          color={(stats.pending ?? 0) > 0 ? C.accent : C.gray} />
-          <div style={{ width: 1, background: 'rgba(255,255,255,0.06)' }} />
-          <StatPill label="Tracking"   value={stats.tracking} />
-          <div style={{ width: 1, background: 'rgba(255,255,255,0.06)' }} />
-          <StatPill label="Positions"  value={`${stats.positions}/10`}     color={stats.positions >= 10 ? C.yellow : C.green} />
-          <div style={{ width: 1, background: 'rgba(255,255,255,0.06)' }} />
-          <StatPill label="Queued"     value={stats.queued}                color={stats.queued > 0 ? C.yellow : C.gray} />
+        {/* Primary Strategy Metrics */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', padding: '10px 0', borderTop: '1px solid rgba(255,255,255,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)', gap: 4 }}>
+          <StatPill label="Discovered"  value={stats.discovered ?? stats.pending ?? 0} color={C.accent} />
+          <StatPill label="Tracking"    value={stats.tracking ?? tracked.length} />
+          <StatPill label="Sustaining"  value={stats.sustaining ?? 0}                  color={C.yellow} />
+          <StatPill label="Eligible"    value={stats.tradeEligible ?? 0}               color={C.green} />
+          <StatPill label="Traded"      value={stats.tradesExecuted ?? 0}              color="#00ff88" />
         </div>
 
         <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
-            { label: 'Consensus 2x ≥80 → 1%', color: 'rgba(0,191,255,0.22)' },
-            { label: 'GMGN wallet scoring',       color: 'rgba(155,89,255,0.18)' },
-            { label: 'TP +100%',                  color: 'rgba(0,255,136,0.15)' },
-            { label: 'SL price -30%',             color: 'rgba(255,68,102,0.12)' },
-            { label: 'SL liq -40%',               color: 'rgba(255,68,102,0.12)' },
-            { label: '1hr window',                color: 'rgba(255,215,0,0.10)' },
+            { label: 'Pump.fun Migrations',    color: 'rgba(168,85,247,0.18)' },
+            { label: 'RugCheck Filter',        color: 'rgba(0,255,136,0.15)' },
+            { label: 'MC ≥ $30,000',           color: 'rgba(0,191,255,0.18)' },
+            { label: 'Liq ≥ $15,000',          color: 'rgba(0,191,255,0.18)' },
+            { label: '10-Min Continuous Gate', color: 'rgba(255,215,0,0.18)' },
+            { label: '2-Hour Window Cap',      color: 'rgba(255,255,255,0.08)' },
           ].map(({ label, color }) => (
             <span key={label} style={{ fontSize: 8, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: color, color: '#c0c8e0', border: '1px solid rgba(255,255,255,0.08)' }}>{label}</span>
           ))}
         </div>
       </div>
 
-      {/* ── Queued signals ── */}
-      {queued.length > 0 && (
-        <div style={{ ...C.card, marginBottom: 16, borderColor: 'rgba(255,215,0,0.2)' }}>
-          <div style={{ ...C.label, marginBottom: 8 }}>⏳ QUEUED SIGNALS ({queued.length})</div>
-          {queued.map((sig: PendingSignal, i: number) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: i < queued.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-              <span style={{ fontSize: 10, color: '#e0e8ff', fontWeight: 700 }}>{sig.symbol}</span>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 9, color: C.accent }}>🎯 {fmtUsd(sig.triggerAmountUsd)}</span>
-                <span style={{ fontSize: 9, color: C.yellow }}>{sig.sizePct}% position</span>
-                <span style={{ fontSize: 8, color: C.gray }}>{timeAgo(sig.queuedAt)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
       )}
 
       {/* ── Tracked Tokens ── */}
