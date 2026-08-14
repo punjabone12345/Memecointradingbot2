@@ -26,6 +26,7 @@ export interface Settings {
   minMc: number;
   sustainDurationSec: number;
   maxTrackingDurationMin: number;
+  maxOpenPositions: number;
 }
 
 export interface BuyerActivity {
@@ -215,6 +216,10 @@ export interface DiagToken {
   created_at: number;
   // computed
   proximity_score?: number;
+  rugcheck_score?: number | null;
+  sustain_started_at?: number | null;
+  sustain_attempts?: number;
+  last_reset_reason?: string | null;
 }
 
 export interface DiagError {
@@ -229,16 +234,15 @@ export interface DiagError {
 
 export interface DiagFunnelStats {
   total: string;
-  ever_passed_wallet: string;
-  ever_passed_liquidity: string;
-  ever_reached_entry: string;
+  passed_rugcheck: string;
+  tracking: string;
+  thresholds_reached: string;
+  sustain_started: string;
+  trade_eligible: string;
   traded: string;
-  rejected_wallet: string;
-  rejected_liquidity: string;
-  rejected_age: string;
-  rejected_freeze: string;
-  rejected_slippage: string;
-  rejected_pool: string;
+  rejected_rugcheck: string;
+  rejected_sustain_reset: string;
+  expired: string;
   rejected_other: string;
 }
 

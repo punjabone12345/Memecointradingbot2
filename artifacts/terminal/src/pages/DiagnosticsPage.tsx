@@ -42,27 +42,14 @@ const C = {
   label:    { fontSize: 9, fontWeight: 800, letterSpacing: '0.12em', color: '#3a5070', textTransform: 'uppercase' as const },
   green:    '#00ff88',
   yellow:   '#ffd700',
+  orange:   '#ffaa00',
   red:      '#ff4466',
   blue:     '#00d4ff',
   purple:   '#9b59ff',
+  accent:   '#00bfff',
+  pump:     '#a855f7',
   gray:     '#4a6080',
   text:     '#d4e0f0',
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  TRADED:    C.green,
-  REJECTED:  C.red,
-  EXPIRED:   C.gray,
-  TRACKED:   C.blue,
-  DISCOVERED: C.yellow,
-};
-
-const STATUS_ICON: Record<string, string> = {
-  TRADED:    '✅',
-  REJECTED:  '❌',
-  EXPIRED:   '⏰',
-  TRACKED:   '👁',
-  DISCOVERED: '🔍',
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS: Settings = {
   wt3Tp1Pct: 150, wt3Tp1Exit: 30,
   wt3Tp2Pct: 350, wt3Tp2Exit: 30, wt3Tp2Trail: 20,
   wt3Tp3Pct: 550, wt3Tp3Exit: 30, wt3Tp3Trail: 10,
+  minLiquidity: 15000, minMc: 30000, sustainDurationSec: 600, maxTrackingDurationMin: 120, maxOpenPositions: 5,
 };
 
 interface NavTab { id: Tab; label: string; color: string; icon: React.ReactNode }
