@@ -60,6 +60,7 @@ export async function getSettings(): Promise<Settings> {
     minMc: num('minMc', 30000),
     sustainDurationSec: num('sustainDurationSec', 600),
     maxTrackingDurationMin: num('maxTrackingDurationMin', 120),
+    maxOpenPositions: num('maxOpenPositions', 5),
   };
 
   settingsCache = settings;

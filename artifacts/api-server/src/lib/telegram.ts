@@ -185,9 +185,13 @@ export async function notifyTrackingExpired(params: {
 
 export async function notifySniperTrade(params: {
   name: string; symbol: string; mint: string;
-  sizeSol: number; entryPrice: number; entryMcap: number; liquidity: number;
+  sizeSol: number; entryPrice: number; entryMcap?: number; liquidity?: number;
+  buyAmountUsd?: number; sizePct?: number; priceAtBuyDetection?: number;
+  slippagePct?: number; buyerWallet?: string; qualifyingWallets?: string[];
+  entryMode?: string; entryScore?: number; qualifyingWalletsCount?: number;
+  priceSource?: string; tpTier?: number;
 }): Promise<void> {
-  const { name, symbol, mint, sizeSol, entryPrice, entryMcap, liquidity } = params;
+  const { name, symbol, mint, sizeSol, entryPrice, entryMcap = 0, liquidity = 0 } = params;
   await sendMessage(
     `🎯 <b>TRADE EXECUTED — ${symbol}</b> (${name})\n` +
     `CA: <code>${mint}</code>\n` +

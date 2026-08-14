@@ -29,6 +29,7 @@ export interface Settings {
   minMc: number;
   sustainDurationSec: number;
   maxTrackingDurationMin: number;
+  maxOpenPositions: number;
 }
 
 export interface WSMessage {

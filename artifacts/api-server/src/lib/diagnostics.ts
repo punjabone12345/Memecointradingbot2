@@ -374,7 +374,7 @@ export async function diagTransactionAudited(audit: DiagTransactionAudit): Promi
  */
 export async function diagTokenValidationMilestone(
   mint: string,
-  field: 'first_dexscreener_pair_at' | 'first_nonzero_liq_at' | 'liq_min_crossed_at' | 'validation_outcome',
+  field: 'first_dexscreener_pair_at' | 'first_nonzero_liq_at' | 'liq_min_crossed_at' | 'validation_outcome' | 'passed_rugcheck_at',
   value: number | string,
 ): Promise<void> {
   const now = Date.now();

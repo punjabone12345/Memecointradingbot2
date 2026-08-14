@@ -1454,12 +1454,13 @@ function enqueueSignal(
 
 async function processQueue(): Promise<void> {
   // Don't dequeue if we're outside the trading window
+  let s: Awaited<ReturnType<typeof getSettings>>;
   try {
-    const s = await getSettings();
+    s = await getSettings();
     if (!isInTradingWindow(s)) return;
   } catch { return; }
 
-  while (signalQueue.length > 0 && openPositions.size < MAX_POSITIONS) {
+  while (signalQueue.length > 0 && openPositions.size < (s.maxOpenPositions ?? 5)) {
     const sig = signalQueue.shift()!;
     const tok  = trackedTokens.get(sig.mint);
     if (!tok || Date.now() > tok.expiresAt) continue;
@@ -1795,9 +1796,14 @@ async function handleVolumeUpdate(
     : `Consensus (${result.qualifyingWallets.length} wallets >= 80 within 5 min)`;
 
   let maxSlippageForQueue = 20;
-  try { maxSlippageForQueue = (await getSettings()).sniperSlippagePct ?? 20; } catch { /* use default */ }
+  let maxOpenPositions = 5;
+  try {
+    const s = await getSettings();
+    maxSlippageForQueue = s.sniperSlippagePct ?? 20;
+    maxOpenPositions = s.maxOpenPositions ?? 5;
+  } catch { /* use default */ }
 
-  if (openPositions.size >= MAX_POSITIONS) {
+  if (openPositions.size >= maxOpenPositions) {
     entry.skipReason = `Max positions — queued (${modeLabel})`;
     enqueueSignal(
       mint, tok.name, tok.symbol, result.sizePct, txUsd, priceAtDetection, wallet, txTimestamp, result.tpTier,
@@ -3239,9 +3245,14 @@ async function processPendingConsensusSignals(): Promise<void> {
     );
 
     let maxSlippageForQueue = 20;
-    try { maxSlippageForQueue = (await getSettings()).sniperSlippagePct ?? 20; } catch {}
+    let maxOpenPositions = 5;
+    try {
+      const s = await getSettings();
+      maxSlippageForQueue = s.sniperSlippagePct ?? 20;
+      maxOpenPositions = s.maxOpenPositions ?? 5;
+    } catch {}
 
-    if (openPositions.size >= MAX_POSITIONS) {
+    if (openPositions.size >= maxOpenPositions) {
       enqueueSignal(
         mint, pending.name, pending.symbol, pending.sizePct, pending.triggerAmountUsd,
         currentPrice, pending.buyerWallet, pending.buyDetectedTimestamp, pending.tpTier,
