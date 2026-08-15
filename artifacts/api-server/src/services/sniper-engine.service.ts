@@ -20,7 +20,7 @@ import {
 import { releaseForRediscovery } from './trenches.service.js';
 
 const ENTRY_DELAY_MS        = 400;     // wait before entering
-const PRICE_CHECK_MS        = 1_500;   // reduced from 3s for snappier live prices
+const PRICE_CHECK_MS        = 1_000;   // 1s sub-second tick for instant live prices and SL/TP cuts
 const POLL_INTERVAL_MS      = 1_000;   // poll interval for scheduleBuyPoll
 const SOL_PRICE_TTL_MS      = 60_000;
 const MAX_BUY_LOG           = 100;
@@ -1179,20 +1179,19 @@ async function enterSniperPosition(
     // Read the latest state of trackedTokens — enrichment may have run during the delay.
     const tok2 = trackedTokens.get(mint);
 
-    // ── Price fetch priority after the 2s wait ───────────────────────────────
-    // Primary: fetch DexScreener market data to ensure 0% discrepancy with monitorPositions
+    // ── Ground-Truth Price Fetching ──────────────────────────────────────────
+    // Priority 1: Jupiter Quote API (real-time on-chain DEX route quote)
+    // Priority 2: Direct vault balances from buyer's tx
+    // Priority 3: On-chain reserve ratio via pool account
+    // Priority 4: DexScreener spot price (fallback only)
     await fetchSolPrice().catch(() => {});
 
     let delayedPrice = 0;
-    let priceSource: 'dexscreener' | 'vault' | 'pool-account' | 'jupiter' = 'dexscreener';
+    let priceSource: 'jupiter' | 'vault' | 'pool-account' | 'dexscreener' = 'jupiter';
 
-    const dexData = await fetchTokenPrice(mint).catch(() => null);
-    if (dexData && dexData.price > 0) {
-      delayedPrice = dexData.price;
-      priceSource = 'dexscreener';
-      if (dexData.mcap > 0 && mcapAtEntry === 0) mcapAtEntry = dexData.mcap;
-      if (dexData.liquidity > 0 && liquidityAtEntry === 0) liquidityAtEntry = dexData.liquidity;
-    }
+    // Path 1: Jupiter quote (sub-second live route quote — most accurate)
+    delayedPrice = await fetchPriceFresh(mint, undefined).catch(() => 0);
+    if (delayedPrice > 0) priceSource = 'jupiter';
 
     // Path 2: direct vault balance read — extracted from buyer's buy tx
     if (delayedPrice === 0 && tok2?.poolBaseVault && tok2?.poolQuoteVault) {
@@ -1206,10 +1205,15 @@ async function enterSniperPosition(
       if (delayedPrice > 0) { priceSource = 'pool-account'; logger.info({ mint: mint.slice(0, 12), price: delayedPrice, source: 'pool-account' }, 'Sniper engine: spot price (pool account fallback)'); }
     }
 
-    // Path 4: Jupiter quote (on-chain-derived, no pool address needed)
+    // Path 4: DexScreener fallback (only if on-chain and Jupiter fail)
     if (delayedPrice === 0) {
-      delayedPrice = await fetchPriceFresh(mint, undefined).catch(() => 0);
-      if (delayedPrice > 0) priceSource = 'jupiter';
+      const dexData = await fetchTokenPrice(mint).catch(() => null);
+      if (dexData && dexData.price > 0) {
+        delayedPrice = dexData.price;
+        priceSource = 'dexscreener';
+        if (dexData.mcap > 0 && mcapAtEntry === 0) mcapAtEntry = dexData.mcap;
+        if (dexData.liquidity > 0 && liquidityAtEntry === 0) liquidityAtEntry = dexData.liquidity;
+      }
     }
 
     // Sanity check: reject unphysically tiny or zero entry prices (prevents fake +50000% PnL)
@@ -2122,6 +2126,7 @@ async function closeSniperPosition(pos: SniperPosition, reason: string): Promise
 
     // Only add runner's return — banked portions already credited
     await adjustBalance(runnerReturn).catch(() => {});
+    await broadcastBalance().catch(() => {});
 
     closedPositions.unshift({ ...pos, closeTime: Date.now(), closeReason: reason, closePnlPct: pnlPct });
     if (closedPositions.length > 200) closedPositions.pop();
@@ -2150,21 +2155,27 @@ async function monitorPositions(): Promise<void> {
   try { settings = await getSettings(); } catch { return; }
 
   try {
-    const r      = await axios.get<any>(`${DEX_BASE}/latest/dex/tokens/${mints.slice(0, 30).join(',')}`, { timeout: 8_000 });
-    const pairs: any[] = r.data?.pairs ?? [];
+    // Batch fetch DexScreener prices as secondary fallback
+    let pairs: any[] = [];
+    try {
+      const r = await axios.get<any>(`${DEX_BASE}/latest/dex/tokens/${mints.slice(0, 30).join(',')}`, { timeout: 4_000 });
+      pairs = r.data?.pairs ?? [];
+    } catch { /* non-fatal */ }
 
     for (const pos of Array.from(openPositions.values())) {
-      const mintPairs = (pairs as any[]).filter((p: any) => p.baseToken?.address === pos.mint);
-      const pumpswapPos = mintPairs
-        .filter((p: any) => (p.dexId ?? '').toLowerCase() === 'pumpswap')
-        .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
-      const byLiqPos = [...mintPairs].sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
-      const best = pumpswapPos[0] ?? byLiqPos[0];
+      // Ground-truth live price check: try Jupiter Quote / On-Chain vault FIRST for sub-second precision
+      let price = await fetchPriceFresh(pos.mint, undefined).catch(() => 0);
+      let liquidity = pos.lastLiquidity;
 
-      if (!best) continue;
-      const price        = parseFloat(best.priceUsd ?? '0');
-      const liquidity    = best.liquidity?.usd ?? 0;
-      const priceChange1h: number | null = best?.priceChange?.h1 ?? null;
+      if (price <= 0) {
+        const mintPairs = (pairs as any[]).filter((p: any) => p.baseToken?.address === pos.mint);
+        const best = pickBestPair(mintPairs);
+        if (best) {
+          price = parseFloat(best.priceUsd ?? '0');
+          liquidity = best.liquidity?.usd ?? liquidity;
+        }
+      }
+
       if (price <= 0) continue;
 
       // Update live price & peak
@@ -2220,13 +2231,7 @@ async function monitorPositions(): Promise<void> {
         if (trail > pos.currentSLPrice) pos.currentSLPrice = trail;
       }
 
-      // Grace period: suppress SL/liq/time exits for 90s post-entry.
-      // Entry price (single-mint DexScreener) vs monitor price (multi-mint) can
-      // diverge enough to trigger SL before the trade has developed.
-      const posAgeMs = Date.now() - pos.entryTime;
-      if (posAgeMs < 90_000) continue;
-
-      // ── Exit conditions (skip if a TP just fired this cycle) ─────────────
+      // ── Exit conditions (IMMEDIATE execution — no 90s grace period delay!) ─────────────
 
       // SL hit
       if (!tpHitThisCycle && price <= pos.currentSLPrice) {
