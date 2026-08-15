@@ -2163,17 +2163,18 @@ async function monitorPositions(): Promise<void> {
     } catch { /* non-fatal */ }
 
     for (const pos of Array.from(openPositions.values())) {
+      const posAgeMs = Date.now() - pos.entryTime;
+      const mintPairs = (pairs as any[]).filter((p: any) => p.baseToken?.address === pos.mint);
+      const best = pickBestPair(mintPairs);
+      const priceChange1h: number | null = best?.priceChange?.h1 ?? null;
+
       // Ground-truth live price check: try Jupiter Quote / On-Chain vault FIRST for sub-second precision
       let price = await fetchPriceFresh(pos.mint, undefined).catch(() => 0);
       let liquidity = pos.lastLiquidity;
 
-      if (price <= 0) {
-        const mintPairs = (pairs as any[]).filter((p: any) => p.baseToken?.address === pos.mint);
-        const best = pickBestPair(mintPairs);
-        if (best) {
-          price = parseFloat(best.priceUsd ?? '0');
-          liquidity = best.liquidity?.usd ?? liquidity;
-        }
+      if (price <= 0 && best) {
+        price = parseFloat(best.priceUsd ?? '0');
+        liquidity = best.liquidity?.usd ?? liquidity;
       }
 
       if (price <= 0) continue;
