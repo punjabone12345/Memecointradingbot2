@@ -21,14 +21,25 @@ async function sendMessage(text: string): Promise<void> {
   }
 }
 
+export function formatPrice(price: number): string {
+  if (!price || isNaN(price) || price <= 0) return '0.00';
+  if (price >= 1) return price.toFixed(4);
+  if (price >= 0.01) return price.toFixed(6);
+  if (price >= 0.0001) return price.toFixed(7);
+  const str = price.toFixed(10);
+  const trimmed = str.replace(/0+$/, '');
+  return trimmed.length < 8 ? price.toFixed(8) : trimmed;
+}
+
 export async function notifyBought(params: {
   name: string; symbol: string; price: number; mc: number; score: number; sizeSol: number;
 }): Promise<void> {
   const { name, symbol, price, mc, score, sizeSol } = params;
+  const mcStr = mc > 0 ? `$${(mc / 1000).toFixed(0)}K` : '$0';
   await sendMessage(
     `🟢 <b>BOUGHT ${symbol}</b> (${name})\n` +
-    `Price: $${price.toFixed(8)}\n` +
-    `MC: $${(mc / 1000).toFixed(0)}K\n` +
+    `Price: $${formatPrice(price)}\n` +
+    `MC: ${mcStr}\n` +
     `Score: ${score}/100\n` +
     `Size: ${sizeSol.toFixed(3)} SOL\n` +
     `Time: ${toIST(new Date())}`
@@ -41,19 +52,18 @@ export async function notifyTPHit(params: {
   peakPrice: number;
 }): Promise<void> {
   const { name, symbol, level, gainPct, profitSol, newSLPct, entryPrice, currentPrice, soldSol, remainingSol, initialSol, peakPrice } = params;
-  // newSLPct == 0 → breakeven; newSLPct < 0 → trailing (|newSLPct|% below peak)
   let slLine: string;
   if (newSLPct === 0) {
-    slLine = `New SL: $${entryPrice.toFixed(8)} (breakeven)`;
+    slLine = `New SL: $${formatPrice(entryPrice)} (breakeven)`;
   } else {
     const trailPct = Math.abs(newSLPct);
     const trailPrice = peakPrice * (1 - trailPct / 100);
-    slLine = `New SL: $${trailPrice.toFixed(8)} (${trailPct}% below peak $${peakPrice.toFixed(8)})`;
+    slLine = `New SL: $${formatPrice(trailPrice)} (${trailPct}% below peak $${formatPrice(peakPrice)})`;
   }
   await sendMessage(
     `🎯 <b>TP${level} HIT — ${symbol}</b> (${name})\n` +
     `Gain: +${gainPct.toFixed(1)}%\n` +
-    `Entry: $${entryPrice.toFixed(8)}  →  Now: $${currentPrice.toFixed(8)}\n` +
+    `Entry: $${formatPrice(entryPrice)}  →  Now: $${formatPrice(currentPrice)}\n` +
     `Sold: ${soldSol.toFixed(4)} SOL  (+${profitSol.toFixed(4)} SOL profit)\n` +
     `Remaining: ${remainingSol.toFixed(4)} SOL (of ${initialSol.toFixed(4)} SOL)\n` +
     `${slLine}\n` +
@@ -192,13 +202,15 @@ export async function notifySniperTrade(params: {
   priceSource?: string; tpTier?: number;
 }): Promise<void> {
   const { name, symbol, mint, sizeSol, entryPrice, entryMcap = 0, liquidity = 0 } = params;
+  const mcStr = entryMcap > 0 ? `$${entryMcap.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : 'N/A';
+  const liqStr = liquidity > 0 ? `$${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : 'N/A';
   await sendMessage(
     `🎯 <b>TRADE EXECUTED — ${symbol}</b> (${name})\n` +
     `CA: <code>${mint}</code>\n` +
-    `Entry MC: $${entryMcap.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
-    `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
+    `Entry MC: ${mcStr}\n` +
+    `Liquidity: ${liqStr}\n` +
     `Position Size: ${sizeSol.toFixed(3)} SOL\n` +
-    `Entry Price: $${entryPrice.toFixed(8)}\n` +
+    `Entry Price: $${formatPrice(entryPrice)}\n` +
     `Time: ${toIST(new Date())}`
   );
 }
@@ -214,7 +226,7 @@ export async function notifySniperClose(params: {
     `${emoji} <b>WHALE CLOSE — ${symbol}</b> (${name})\n` +
     `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
     `PNL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%  (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
-    `Entry: ${entryPrice.toFixed(8)}  →  Exit: ${exitPrice.toFixed(8)}\n` +
+    `Entry: $${formatPrice(entryPrice)}  →  Exit: $${formatPrice(exitPrice)}\n` +
     `Size: ${sizeSol.toFixed(3)} SOL\n` +
     `Reason: ${reason}\n` +
     `Time: ${toIST(new Date())}`
@@ -238,11 +250,11 @@ export async function notifySniperTP(params: {
   await sendMessage(
     `🎯 <b>WHALE TP${tpNum} — ${symbol}</b> (${name})\n` +
     `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
-    `Gain: +${gainPct.toFixed(1)}%  (Entry ${entryPrice.toFixed(8)} → ${currentPrice.toFixed(8)})\n` +
+    `Gain: +${gainPct.toFixed(1)}%  (Entry $${formatPrice(entryPrice)} → $${formatPrice(currentPrice)})\n` +
     `Sold: ${chunkSol.toFixed(4)} SOL → ${returnedSol.toFixed(4)} SOL (+${profitSol.toFixed(4)} profit)\n` +
     `Remaining: ${pctRemaining}% of position (${remainingSizeSol.toFixed(4)} SOL)\n` +
     `Total banked: ${totalBanked.toFixed(4)} SOL\n` +
-    `New SL: ${newSLPrice.toFixed(8)} (${newSLDesc})\n` +
+    `New SL: $${formatPrice(newSLPrice)} (${newSLDesc})\n` +
     `Time: ${toIST(new Date())}`
   );
 }
@@ -256,7 +268,7 @@ export async function notifySniperSkip(params: {
   let extra = '';
   if (entryPrice && priceAtBuyDetection && maxSlippagePct) {
     const slip = ((entryPrice - priceAtBuyDetection) / priceAtBuyDetection * 100).toFixed(1);
-    extra = `\nPrice Slip: ${slip}% (max ${maxSlippagePct}%)\nDetected Price: $${priceAtBuyDetection.toFixed(8)}\nCurrent: $${entryPrice.toFixed(8)}`;
+    extra = `\nPrice Slip: ${slip}% (max ${maxSlippagePct}%)\nDetected Price: $${formatPrice(priceAtBuyDetection)}\nCurrent: $${formatPrice(entryPrice)}`;
   }
   await sendMessage(
     `⏭️ <b>WHALE SKIP — ${symbol}</b> (${name})\n` +
@@ -266,3 +278,4 @@ export async function notifySniperSkip(params: {
     `Time: ${toIST(new Date())}`
   );
 }
+

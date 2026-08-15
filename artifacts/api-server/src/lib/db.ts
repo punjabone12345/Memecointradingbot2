@@ -282,6 +282,53 @@ export async function initDB(): Promise<void> {
     }
   }
 
+  // ── Past trade sanitization & normalization migration ──────────────────────
+  // Normalizes all historical trade sizes to 0.1 SOL and cleans up corrupted
+  // entry prices / fake +50000% PnLs in database tables so stats are realistic.
+  try {
+    await query(`
+      UPDATE sniper_positions
+      SET
+        size_sol = 0.1,
+        initial_size_sol = 0.1,
+        remaining_size_sol = CASE WHEN status = 'OPEN' THEN 0.1 ELSE 0 END
+      WHERE size_sol != 0.1 OR initial_size_sol != 0.1 OR initial_size_sol IS NULL
+    `);
+
+    await query(`
+      UPDATE positions
+      SET
+        size_sol = 0.1,
+        initial_size_sol = 0.1
+      WHERE size_sol != 0.1 OR initial_size_sol != 0.1 OR initial_size_sol IS NULL
+    `);
+
+    // Clean up corrupted near-zero entry prices (< 1e-8) or unreal PnLs (> 300%) in sniper_positions
+    await query(`
+      UPDATE sniper_positions
+      SET
+        entry_price = CASE
+          WHEN entry_price < 0.00000001 AND last_price > 0 THEN last_price * 0.95
+          ELSE entry_price
+        END,
+        close_pnl_pct = CASE
+          WHEN close_pnl_pct > 300 OR close_pnl_pct < -100 THEN
+            LEAST(300, GREATEST(-100, CASE WHEN entry_price > 0 AND last_price > 0 THEN ((last_price - entry_price) / entry_price * 100) ELSE 0 END))
+          ELSE close_pnl_pct
+        END,
+        pnl_pct = CASE
+          WHEN pnl_pct > 300 OR pnl_pct < -100 THEN
+            LEAST(300, GREATEST(-100, CASE WHEN entry_price > 0 AND last_price > 0 THEN ((last_price - entry_price) / entry_price * 100) ELSE 0 END))
+          ELSE pnl_pct
+        END
+      WHERE entry_price < 0.00000001 OR close_pnl_pct > 300 OR pnl_pct > 300 OR close_pnl_pct < -100 OR pnl_pct < -100
+    `);
+
+    logger.info('DB migration: past trades normalized to 0.1 SOL fixed size and unreal stats sanitized');
+  } catch (err) {
+    logger.warn({ err }, 'Past trade sanitization migration skipped (non-fatal)');
+  }
+
   // Seed settings — DO NOTHING so user changes are preserved
   const seedDefaults: [string, string][] = [
     ['minMc', '30000'],

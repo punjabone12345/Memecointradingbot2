@@ -123,7 +123,7 @@ export interface SniperPosition {
   entryScore?: number;                    // GMGN score of the triggering wallet
   qualifyingWalletsCount?: number;        // how many distinct >=80 wallets had qualified (consensus mode)
   buyerWallet?: string;                   // wallet whose buy triggered this entry
-  priceSource?: 'vault' | 'pool-account' | 'jupiter'; // which price-fetch path succeeded
+  priceSource?: 'dexscreener' | 'vault' | 'pool-account' | 'jupiter'; // which price-fetch path succeeded
   priceAtDetection?: number;              // buyer's on-chain avg price when their buy was detected
   actualSlippagePct?: number;             // (entryPrice - priceAtDetection) / priceAtDetection * 100
   maxSlippagePct?: number;                // slippage cap in effect at entry time
@@ -1180,46 +1180,49 @@ async function enterSniperPosition(
     const tok2 = trackedTokens.get(mint);
 
     // ── Price fetch priority after the 2s wait ───────────────────────────────
-    // 1. Direct vault read from buyer's tx (ground truth — no pool addr resolution needed)
-    // 2. On-chain reserve ratio via DexScreener pool address (if enrichment has resolved it)
-    // 3. Jupiter quote (no pool address needed)
-    // If all fail: skip entry — never fall back to DexScreener priceUsd (it's 30-120s stale)
-    await fetchSolPrice().catch(() => {}); // ensure SOL price is fresh for all paths
+    // Primary: fetch DexScreener market data to ensure 0% discrepancy with monitorPositions
+    await fetchSolPrice().catch(() => {});
 
     let delayedPrice = 0;
-    let priceSource: 'vault' | 'pool-account' | 'jupiter' = 'vault';
+    let priceSource: 'dexscreener' | 'vault' | 'pool-account' | 'jupiter' = 'dexscreener';
 
-    // Path 1: direct vault balance read — extracted from buyer's buy tx
-    if (tok2?.poolBaseVault && tok2?.poolQuoteVault) {
-      delayedPrice = await fetchPriceFromVaults(tok2.poolBaseVault, tok2.poolQuoteVault, cachedSolPrice, true).catch(() => 0);
+    const dexData = await fetchTokenPrice(mint).catch(() => null);
+    if (dexData && dexData.price > 0) {
+      delayedPrice = dexData.price;
+      priceSource = 'dexscreener';
+      if (dexData.mcap > 0 && mcapAtEntry === 0) mcapAtEntry = dexData.mcap;
+      if (dexData.liquidity > 0 && liquidityAtEntry === 0) liquidityAtEntry = dexData.liquidity;
     }
 
-    // Path 2: on-chain reserve ratio via pool account (requires DexScreener pool addr)
+    // Path 2: direct vault balance read — extracted from buyer's buy tx
+    if (delayedPrice === 0 && tok2?.poolBaseVault && tok2?.poolQuoteVault) {
+      delayedPrice = await fetchPriceFromVaults(tok2.poolBaseVault, tok2.poolQuoteVault, cachedSolPrice, true).catch(() => 0);
+      if (delayedPrice > 0) priceSource = 'vault';
+    }
+
+    // Path 3: on-chain reserve ratio via pool account
     if (delayedPrice === 0 && tok2?.poolAddress) {
       delayedPrice = await fetchOnChainReservePrice(tok2.poolAddress, cachedSolPrice, true).catch(() => 0);
       if (delayedPrice > 0) { priceSource = 'pool-account'; logger.info({ mint: mint.slice(0, 12), price: delayedPrice, source: 'pool-account' }, 'Sniper engine: spot price (pool account fallback)'); }
     }
 
-    // Path 3: Jupiter quote (on-chain-derived, no pool address needed)
+    // Path 4: Jupiter quote (on-chain-derived, no pool address needed)
     if (delayedPrice === 0) {
-      delayedPrice = await fetchPriceFresh(mint, undefined).catch(() => 0); // pairAddress=undefined → skips on-chain read, goes straight to Jupiter
+      delayedPrice = await fetchPriceFresh(mint, undefined).catch(() => 0);
       if (delayedPrice > 0) priceSource = 'jupiter';
     }
 
-    // Do NOT fall back to DexScreener priceUsd — it's 30-120s stale on fresh tokens
-    // and will return the pre-buyer-pump price, making our entry price completely wrong.
-    if (delayedPrice === 0) {
-      logger.warn({ mint: mint.slice(0, 12), symbol }, 'Sniper engine: all price sources failed — skipping entry (will retry on next buyer buy)');
-      void diagTechError('PRICE_FETCH_FAILED', 'All price sources failed — entry skipped', mint.slice(0, 12)).catch(() => {});
-      if (tok) tok.entryTriggered = false; // allow future qualifying buys to trigger
+    // Sanity check: reject unphysically tiny or zero entry prices (prevents fake +50000% PnL)
+    if (delayedPrice < 0.00000001 || isNaN(delayedPrice)) {
+      logger.warn({ mint: mint.slice(0, 12), symbol, price: delayedPrice }, 'Sniper engine: all price sources failed or price invalid — skipping entry');
+      void diagTechError('PRICE_FETCH_FAILED', 'All price sources failed or invalid — entry skipped', mint.slice(0, 12)).catch(() => {});
+      if (tok) tok.entryTriggered = false;
       return;
     }
 
     const finalEntryPrice = delayedPrice;
 
     // Price filter (double-check with resolved entry price): only enter tokens below $0.001.
-    // priceAtDetection was already checked in handleVolumeUpdate, but the entry price may
-    // differ after the delay — re-verify here before committing capital.
     if (finalEntryPrice >= 0.001) {
       logger.info(
         { mint: mint.slice(0, 12), symbol, price: finalEntryPrice },
@@ -1234,8 +1237,6 @@ async function enterSniperPosition(
     const entryDelayMs   = entryTimestamp - buyDetectedTimestamp;
 
     // ── Slippage check (single, post-delay) ──────────────────────────────────
-    // Compare our actual entry price against the buyer's on-chain avg price.
-    // If the token pumped more than maxSlippage% in the wait window, skip.
     if (priceAtDetection > 0) {
       const finalSlipPct = ((finalEntryPrice - priceAtDetection) / priceAtDetection) * 100;
       if (finalSlipPct > maxSlippage) {
@@ -1243,14 +1244,6 @@ async function enterSniperPosition(
           { mint: mint.slice(0, 12), symbol, finalSlipPct: finalSlipPct.toFixed(1), maxSlippage },
           'Sniper engine: post-delay slippage exceeded — skipped',
         );
-        // notifySniperSkip({
-        //   name, symbol, mint, buyAmountUsd: triggerAmountUsd,
-        //   reason: `Slippage ${finalSlipPct.toFixed(1)}% > ${maxSlippage}% max`,
-        //   entryPrice: finalEntryPrice, priceAtBuyDetection: priceAtDetection, maxSlippagePct: maxSlippage,
-        // }).catch(() => {});
-        // Permanently block this mint — it already pumped past our threshold
-        // before we could enter; future buyer buys on the same token would face
-        // the same or worse slippage so we never attempt it again.
         markMintSlippageSkipped(mint, finalSlipPct).catch(() => {});
         if (tok) tok.entryTriggered = false;
         return;
@@ -1269,8 +1262,8 @@ async function enterSniperPosition(
       'Sniper engine: entering after delay — price fetched post-delay',
     );
 
-    const balance = await getBalance().catch(() => 10);
-    const sizeSol = balance * (sizePct / 100);
+    // Fixed trade size: each and every trade is traded at exactly 0.1 SOL
+    const sizeSol = 0.1;
     const liquidity = liquidityAtEntry;
 
     const pos: SniperPosition = {
@@ -1327,13 +1320,15 @@ async function enterSniperPosition(
 
     logger.info(
       { mint, symbol, sizePct, sizeSol: sizeSol.toFixed(3), entryPrice: finalEntryPrice, trigger: triggerAmountUsd.toFixed(0) },
-      'Sniper engine: ENTERED',
+      'Sniper engine: ENTERED (0.1 SOL fixed size)',
     );
 
     notifySniperTrade({
       name, symbol, mint,
       buyAmountUsd: triggerAmountUsd,
       sizePct, sizeSol, entryPrice: finalEntryPrice,
+      entryMcap: mcapAtEntry,
+      liquidity: liquidityAtEntry,
       priceAtBuyDetection: priceAtDetection,
       slippagePct: maxSlippage,
       buyerWallet,
@@ -2179,9 +2174,11 @@ async function monitorPositions(): Promise<void> {
 
       // Live P&L: accounts for banked SOL from partial closes
       const initSize = pos.initialSizeSol > 0.0001 ? pos.initialSizeSol : pos.sizeSol;
-      pos.pnlPct = initSize > 0
+      let rawPnlPct = (initSize > 0 && pos.entryPrice > 0)
         ? ((pos.bankedSol + pos.remainingSizeSol * (price / pos.entryPrice) - initSize) / initSize) * 100
-        : ((price - pos.entryPrice) / pos.entryPrice) * 100;
+        : (pos.entryPrice > 0 ? ((price - pos.entryPrice) / pos.entryPrice) * 100 : 0);
+      if (isNaN(rawPnlPct) || !isFinite(rawPnlPct)) rawPnlPct = 0;
+      pos.pnlPct = Math.min(Math.max(rawPnlPct, -100), 500);
 
       void saveSniperPosition(pos);
 
