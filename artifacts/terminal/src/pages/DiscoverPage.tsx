@@ -158,6 +158,7 @@ const C = {
   orange: '#ff8c00',
   gray:   '#4a6080',
   pump:   '#a855f7',  // purple brand colour for pump.fun migrations
+  purple: '#9b59ff',
 };
 
 function dexUrl(mint: string): string {

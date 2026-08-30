@@ -10,7 +10,7 @@
     "push": "git add -A && git commit -m \"Resolve issues and update strategy\" && git push"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "private": true,
   "devDependencies": {
