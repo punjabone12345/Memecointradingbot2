@@ -3039,9 +3039,9 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
         tok.rugcheckAttempts = (tok.rugcheckAttempts || 0) + 1;
         tok.rugcheckRetryAt = null;
         logger.info({ mint: tok.mint.slice(0, 12), attempt: tok.rugcheckAttempts }, 'Sniper engine: retrying Rugcheck after 5-minute wait');
-        const passed = await checkRugcheck(tok.mint).catch(() => false);
-        tok.rugcheckPassed = passed;
-        if (!passed) {
+        const rc = await checkRugcheck(tok.mint).catch(() => ({ ok: false, topHolder: 0, creatorPct: 0 }));
+        tok.rugcheckPassed = rc.ok;
+        if (!rc.ok) {
           tok.status = 'REJECTED';
           tok.lastResetReason = 'Rugcheck Failed (2 attempts)';
           void diagTokenRejected(tok.mint, 'Rugcheck Failed (2 attempts)').catch(() => {});
@@ -3069,7 +3069,7 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
           { mint: tok.mint.slice(0, 12), symbol: tok.symbol, mcap: currentMcap, launchMcap: launch },
           'Sniper engine: rejected fake setup (instant bot spike)',
         );
-        void diagTokenRejected(tok.mint, tok.lastResetReason).catch(() => {});
+        void diagTokenRejected(tok.mint, tok.lastResetReason || 'Fake Setup - Instant Spike').catch(() => {});
         continue;
       }
     }
