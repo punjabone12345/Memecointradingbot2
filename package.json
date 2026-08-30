@@ -9,6 +9,7 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "push": "git add -A && git commit -m \"Resolve issues and update strategy\" && git push",
   },
+  "engines": { "node": "18.x" },
   "private": true,
   "devDependencies": {
     "typescript": "~5.9.2",
