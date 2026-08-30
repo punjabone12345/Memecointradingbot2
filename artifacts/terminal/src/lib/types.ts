@@ -71,7 +71,9 @@ export interface TrackedToken {
   rugcheckRetryAt?: number | null;
   launchMcap?: number;
   candlesCount?: number;
+  candles?: TokenCandle[];
   ema20?: number | null;
+  ema20Mcap?: number | null;
   emaStartMcap?: number | null;
   pumpTargetMcap?: number | null;
   peakMcapSinceEma?: number;
@@ -230,7 +232,7 @@ export interface DiagToken {
   passed_creator_at: number | null;
   passed_wallet_at: number | null;
   passed_entry_at: number | null;
-  status: 'DISCOVERED' | 'TRACKED' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED';
+  status: 'DISCOVERED' | 'TRACKED' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'RUGCHECK_PENDING' | 'BUILDING_EMA' | 'WAITING_FOR_PUMP' | 'PUMP_TARGET_HIT';
   reject_reason: string | null;
   entry_time: number | null;
   entry_price: number | null;
