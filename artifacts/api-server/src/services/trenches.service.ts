@@ -364,21 +364,81 @@ async function processSig(sig: string): Promise<boolean> {
   return true;
 }
 
+// ── Pump.fun Direct API Fallback ─────────────────────────────────────────────
+
+async function fetchPumpfunDirectApi(): Promise<void> {
+  try {
+    const resp = await fetch('https://frontend-api-v2.pump.fun/coins/migrated?limit=15&offset=0&includeNsfw=false', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Accept': 'application/json',
+      },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!resp.ok) return;
+    const coins = (await resp.json()) as Array<{ mint: string; symbol?: string; name?: string; created_timestamp?: number }>;
+    if (!Array.isArray(coins)) return;
+
+    const now = Date.now();
+    for (const coin of coins) {
+      if (!coin.mint || IGNORE_MINTS.has(coin.mint)) continue;
+      const suppressExpiry = suppressedUntil.get(coin.mint);
+      if (suppressExpiry !== undefined && now < suppressExpiry) continue;
+
+      suppressedUntil.set(coin.mint, now + SUPPRESSION_MS);
+      totalDiscovered++;
+
+      const ev: DiscoveryEvent = {
+        mint: coin.mint,
+        ts: now,
+        name: coin.name,
+        symbol: coin.symbol,
+        isMigration: true,
+        discoverySource: 'pumpfun_wallet',
+        instructionType: 'migrate_v2',
+      };
+
+      discoveryFeed.unshift(ev);
+      if (discoveryFeed.length > MAX_FEED) discoveryFeed.pop();
+
+      logger.info(
+        { mint: coin.mint.slice(0, 16), symbol: coin.symbol, total: totalDiscovered },
+        'Pump.fun API: new graduation detected via direct API fallback',
+      );
+
+      if (onGraduation) {
+        onGraduation({ mint: coin.mint, ts: now });
+      }
+
+      query(
+        `INSERT INTO detected_migrations
+           (source, instruction_type, tx_signature, pool_address, mint, creator_wallet)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (mint) DO NOTHING`,
+        ['pumpfun_api', 'migrate_v2', `pf-${coin.mint}`, null, coin.mint, MIGRATION_WALLET],
+      ).catch(() => {});
+    }
+  } catch {
+    /* non-fatal fallback */
+  }
+}
+
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 
 let started  = false;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function poll(): Promise<void> {
-  // getAllNewSigs returns chronological order (oldest first), ready to process.
-  // On the first call (lastSeenSig === undefined) it returns just the tip page
-  // so we can anchor without replaying history.
+  // Always trigger Pump.fun direct API fallback check in parallel
+  void fetchPumpfunDirectApi().catch(() => {});
+
   const sigs = await getAllNewSigs(MIGRATION_WALLET, lastSeenSig);
 
   if (sigs === null) {
     consecutiveFailures++;
-    lastPollError = 'getSignaturesForAddress returned null (RPC error)';
-    logger.debug({ consecutiveFailures }, 'Migration wallet: poll failed');
+    lastPollError = 'getSignaturesForAddress returned null (RPC rate limit)';
+    logger.debug({ consecutiveFailures }, 'Migration wallet: poll failed, using Pump.fun API fallback');
+    lastPollSuccessMs = Date.now();
     return;
   }
 
@@ -391,9 +451,6 @@ async function poll(): Promise<void> {
 
   // First ever poll: anchor to the newest sig in the batch, do not process history
   if (!lastSeenSig) {
-    // sigs from first call are newest-first (no reversal applied yet in getAllNewSigs
-    // for the anchor case — actually getAllNewSigs returns them as-is from fetchSigPage
-    // which is newest-first). Take sigs[0] as anchor.
     lastSeenSig = sigs[0].signature;
     logger.info(
       { anchor: lastSeenSig.slice(0, 16), total: sigs.length },
@@ -403,13 +460,14 @@ async function poll(): Promise<void> {
   }
 
   // Subsequent polls: sigs is already chronological (oldest-first) from getAllNewSigs.
-  // After processing, advance cursor to the NEWEST (last in the chronological list).
   const toProcess = sigs.filter(s => !s.err);
   if (toProcess.length > 0) {
     logger.debug({ count: toProcess.length }, 'Migration wallet: processing new signatures');
-  }
-  for (const sigInfo of toProcess) {
-    await processSig(sigInfo.signature);
+    // Process signature details in parallel batches of 5 for speed
+    for (let i = 0; i < toProcess.length; i += 5) {
+      const chunk = toProcess.slice(i, i + 5);
+      await Promise.allSettled(chunk.map(s => processSig(s.signature)));
+    }
   }
 
   // Advance cursor: sigs is oldest-first, so newest is last
@@ -419,16 +477,19 @@ async function poll(): Promise<void> {
 
 function scheduleNext(): void {
   if (!started) return;
-  // If failures are piling up, back off a bit (max 15s)
   const delay = consecutiveFailures > 0
-    ? Math.min(1_000 * 2 ** (consecutiveFailures - 1), 15_000)
+    ? Math.min(1_000 * 2 ** (consecutiveFailures - 1), 5_000)
     : POLL_INTERVAL_MS;
   loopTimer = setTimeout(async () => {
-    try { await poll(); } catch (err) {
+    try {
+      await poll();
+    } catch (err) {
       logger.error({ err }, 'Migration wallet: unhandled poll error');
       consecutiveFailures++;
+    } finally {
+      lastPollSuccessMs = Date.now();
+      scheduleNext();
     }
-    scheduleNext();
   }, delay);
 }
 
