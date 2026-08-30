@@ -46,6 +46,18 @@ export interface BuyerActivity {
 }
 
 
+export interface TokenCandle {
+  minute: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  openMcap: number;
+  highMcap: number;
+  lowMcap: number;
+  closeMcap: number;
+}
+
 export interface TrackedToken {
   mint: string;
   name: string;
@@ -60,10 +72,23 @@ export interface TrackedToken {
   buyerActivity: BuyerActivity[];
   // Strategy tracking state
   rugcheckPassed?: boolean;
+  rugcheckAttempts?: number;
+  rugcheckRetryAt?: number | null;
+  launchMcap?: number;
+  candles?: TokenCandle[];
+  candlesCount?: number;
+  ema20?: number | null;
+  ema20Mcap?: number | null;
+  emaStartMcap?: number | null;
+  pumpTargetMcap?: number | null;
+  peakMcapSinceEma?: number;
+  pumpTargetHit?: boolean;
+  recent20MinLowPrice?: number;
+  recent20MinLowMcap?: number;
   sustainStartedAt?: number | null;
   sustainAttempts?: number;
   lastResetReason?: string | null;
-  status?: 'TRACKING' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
+  status?: 'TRACKING' | 'RUGCHECK_PENDING' | 'BUILDING_EMA' | 'WAITING_FOR_PUMP' | 'PUMP_TARGET_HIT' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
   thresholdsNotified?: boolean;
   resetNotified?: boolean;
   completedNotified?: boolean;
@@ -144,20 +169,21 @@ function determineTier(amountUsd: number): 1 | 2 | 3 {
 }
 
 function getTierConfig(tier: 1 | 2 | 3, s: { [k: string]: number }): EntryTierConfig {
-  if (tier === 3) return {
-    tp1Pct: s['wt3Tp1Pct'] ?? 150, tp1Exit: s['wt3Tp1Exit'] ?? 30,
-    tp2Pct: s['wt3Tp2Pct'] ?? 350, tp2Exit: s['wt3Tp2Exit'] ?? 30, tp2Trail: s['wt3Tp2Trail'] ?? 20,
-    tp3Pct: s['wt3Tp3Pct'] ?? 550, tp3Exit: s['wt3Tp3Exit'] ?? 30, tp3Trail: s['wt3Tp3Trail'] ?? 10,
-  };
-  if (tier === 2) return {
-    tp1Pct: s['wt2Tp1Pct'] ?? 100, tp1Exit: s['wt2Tp1Exit'] ?? 30,
-    tp2Pct: s['wt2Tp2Pct'] ?? 250, tp2Exit: s['wt2Tp2Exit'] ?? 30, tp2Trail: s['wt2Tp2Trail'] ?? 25,
-    tp3Pct: s['wt2Tp3Pct'] ?? 400, tp3Exit: s['wt2Tp3Exit'] ?? 30, tp3Trail: s['wt2Tp3Trail'] ?? 15,
-  };
+  const tp1Pct = s['tp1Pct'] ?? 100;
+  const tp1Exit = s['tp1ExitPct'] ?? 30;
+
+  const tp2Pct = s['tp2Pct'] ?? 250;
+  const tp2Exit = s['tp2ExitPct'] ?? 40;
+  const tp2Trail = s['trailingSLPct'] ?? 30;
+
+  const tp3Pct = s['tp3Pct'] ?? 400;
+  const tp3Exit = s['tp3ExitPct'] ?? 30;
+  const tp3Trail = s['trailingSLPct'] ?? 30;
+
   return {
-    tp1Pct: s['wt1Tp1Pct'] ?? 50,  tp1Exit: s['wt1Tp1Exit'] ?? 30,
-    tp2Pct: s['wt1Tp2Pct'] ?? 125, tp2Exit: s['wt1Tp2Exit'] ?? 30, tp2Trail: s['wt1Tp2Trail'] ?? 30,
-    tp3Pct: s['wt1Tp3Pct'] ?? 200, tp3Exit: s['wt1Tp3Exit'] ?? 30, tp3Trail: s['wt1Tp3Trail'] ?? 20,
+    tp1Pct, tp1Exit,
+    tp2Pct, tp2Exit, tp2Trail,
+    tp3Pct, tp3Exit, tp3Trail,
   };
 }
 
@@ -1126,6 +1152,8 @@ async function enterSniperPosition(
   qualifyingWalletsCount: number = 1,
   maxSlippagePctOverride?: number,
   qualifyingWallets: string[] = [],
+  overrideInitialSLPrice?: number,
+  overrideSizeSol?: number,
 ): Promise<void> {
   // Synchronous reservation — no `await` happens between the check and the
   // lock being taken, so two overlapping calls for the same mint (e.g. from
@@ -1136,54 +1164,30 @@ async function enterSniperPosition(
   entryLocks.add(mint);
 
   try {
-    // Market metadata (liquidity, mcap, name, symbol) is DexScreener-backed and
-    // was previously fetched here with a blocking await — adding up to 6s to
-    // EVERY entry for display-only data we already have a placeholder for.
-    // It is not needed to compute the entry price (that comes from on-chain
-    // vault reads below), so it's deferred to a fire-and-forget refresh that
-    // patches the position/tracked-token record once it lands.
     const tok = trackedTokens.get(mint);
     let liquidityAtEntry = tok?.liquidity ?? 0;
     let mcapAtEntry = tok?.mcap ?? 0;
 
     // ── Slippage guard ─────────────────────────────────────────────────────────
     let maxSlippage = 20;
+    let configuredSizeSol = 0.10;
     try {
       const s = await getSettings();
       maxSlippage = s.sniperSlippagePct ?? 20;
+      configuredSizeSol = s.positionSizeSol ?? 0.10;
     } catch { /* use default */ }
     if (maxSlippagePctOverride !== undefined) maxSlippage = maxSlippagePctOverride;
 
     // Re-check after the async gaps above — belt-and-suspenders.
     if (openPositions.has(mint)) return;
 
-    // Mark entryTriggered BEFORE the delay so validateOrPrune cannot prune
-    // this token during the wait window.
     if (tok) tok.entryTriggered = true;
 
-    // ── 2-second entry delay ─────────────────────────────────────────────────
-    // We do NOT fetch price before this delay:
-    //   • the pool address may not yet be resolved (enrichTokenMetadataAsync is
-    //     async and takes 5-15s);
-    //   • on-chain reserve reads would return the stale pre-buyer pool state
-    //     if RPC is lagging or rate-limited;
-    //   • DexScreener lags 30-120s and would return an even older price.
-    // Instead we wait, then fetch ONCE — by that time Jupiter has the token,
-    // DexScreener has often updated, and the pool address is more likely set.
-    // If the fetch still fails, we fall back to priceAtDetection (the buyer's
-    // verified on-chain avg price from the tx), which is far more accurate than
-    // any stale cached value.
     await new Promise(r => setTimeout(r, ENTRY_DELAY_MS));
     if (openPositions.has(mint)) return;
 
-    // Read the latest state of trackedTokens — enrichment may have run during the delay.
     const tok2 = trackedTokens.get(mint);
 
-    // ── Ground-Truth Price Fetching ──────────────────────────────────────────
-    // Priority 1: Jupiter Quote API (real-time on-chain DEX route quote)
-    // Priority 2: Direct vault balances from buyer's tx
-    // Priority 3: On-chain reserve ratio via pool account
-    // Priority 4: DexScreener spot price (fallback only)
     await fetchSolPrice().catch(() => {});
 
     let delayedPrice = 0;
@@ -1225,18 +1229,6 @@ async function enterSniperPosition(
     }
 
     const finalEntryPrice = delayedPrice;
-
-    // Price filter (double-check with resolved entry price): only enter tokens below $0.001.
-    if (finalEntryPrice >= 0.001) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol, price: finalEntryPrice },
-        'Sniper engine: entry price >= $0.001 — entry skipped (price filter)',
-      );
-      void diagTokenRejected(mint, `Entry price ${finalEntryPrice.toFixed(6)} >= $0.001`).catch(() => {});
-      if (tok) tok.entryTriggered = false;
-      return;
-    }
-
     const entryTimestamp = Date.now();
     const entryDelayMs   = entryTimestamp - buyDetectedTimestamp;
 
@@ -1263,12 +1255,16 @@ async function enterSniperPosition(
         buyDetectedAt: new Date(buyDetectedTimestamp).toISOString(),
         ourEntryAt: new Date(entryTimestamp).toISOString(),
         entryDelayMs },
-      'Sniper engine: entering after delay — price fetched post-delay',
+      'Sniper engine: entering position for 20 EMA retrace strategy',
     );
 
-    // Fixed trade size: each and every trade is traded at exactly 0.1 SOL
-    const sizeSol = 0.1;
+    const sizeSol = overrideSizeSol ?? configuredSizeSol;
     const liquidity = liquidityAtEntry;
+
+    // Initial SL: recent 20-minute low price (capped at max 98% of entry price to avoid instant stop out)
+    const initialSL = overrideInitialSLPrice && overrideInitialSLPrice > 0
+      ? Math.min(overrideInitialSLPrice, finalEntryPrice * 0.98)
+      : finalEntryPrice * (1 - PRICE_SL_PCT);
 
     const pos: SniperPosition = {
       id: `${mint}-${Date.now()}`,
@@ -1289,7 +1285,7 @@ async function enterSniperPosition(
       bankedSol:         0,
       tpTier,
       triggerAmountUsd,
-      currentSLPrice:    finalEntryPrice * (1 - PRICE_SL_PCT),
+      currentSLPrice:    initialSL,
       // Timing
       buyDetectedTimestamp,
       entryDelayMs,
@@ -1329,16 +1325,12 @@ async function enterSniperPosition(
 
     notifySniperTrade({
       name, symbol, mint,
-      buyAmountUsd: triggerAmountUsd,
-      sizePct, sizeSol, entryPrice: finalEntryPrice,
+      sizeSol, entryPrice: finalEntryPrice,
       entryMcap: mcapAtEntry,
       liquidity: liquidityAtEntry,
-      priceAtBuyDetection: priceAtDetection,
-      slippagePct: maxSlippage,
-      buyerWallet,
-      qualifyingWallets,
-      entryMode, entryScore, qualifyingWalletsCount,
-      priceSource, tpTier,
+      ema20Mcap: tok2?.ema20Mcap ?? tok?.ema20Mcap ?? 0,
+      slMcap: tok2?.recent20MinLowMcap ?? tok?.recent20MinLowMcap ?? 0,
+      slPrice: initialSL,
     }).catch(() => {});
 
     broadcastSniperStatus();
@@ -2389,22 +2381,20 @@ async function activateTrackingNow(mint: string): Promise<void> {
     if (!tok) return;
     tok.rugcheckPassed = rc.ok;
     if (!rc.ok) {
-      tok.status = 'REJECTED';
-      void diagTokenRejected(mint, 'RugCheck failed: high risk / creator insider / freeze authority').catch(() => {});
-      // void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: false });
-      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token failed RugCheck safety filters');
+      tok.rugcheckAttempts = 1;
+      tok.rugcheckRetryAt = Date.now() + 5 * 60 * 1000; // Retry after 5 minutes
+      tok.status = 'RUGCHECK_PENDING';
+      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token failed initial RugCheck — scheduled retry in 5 minutes');
     } else {
-      tok.status = 'TRACKING';
+      tok.status = 'BUILDING_EMA';
       void diagTokenValidationMilestone(mint, 'passed_rugcheck_at', Date.now()).catch(() => {});
-      // void notifyDiscovered({ symbol: tok.symbol, mint: tok.mint, rugcheckOk: true });
-      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token passed RugCheck safety filters');
+      logger.info({ mint: mint.slice(0, 12) }, 'Sniper engine: token passed RugCheck — building 20 EMA');
     }
     broadcastSniperStatus();
   }).catch(() => {});
 
-  // Background tasks
+  // Background task: enrich metadata from DexScreener
   void enrichTokenMetadataAsync(mint, pending.detectedAt);
-  void validateOrPrune(mint, pending.detectedAt);
 }
 
 // Quality gate: after VALIDATION_DELAY_MS, check DexScreener for a real post-grad pool.
@@ -2800,30 +2790,27 @@ export function getSniperStatus() {
   const now = Date.now();
 
   const rugcheckPassedCount = allTokens.filter(t => t.rugcheckPassed === true).length;
-  const waitingForThresholdsCount = allTokens.filter(t => t.status === 'WAITING_FOR_THRESHOLDS' || t.status === 'TRACKING').length;
-  const sustainingCount = allTokens.filter(t => t.status === 'SUSTAINING').length;
-  const sustainCompletedCount = allTokens.filter(t => t.status === 'SUSTAIN_COMPLETED' || t.status === 'TRADE_ELIGIBLE').length;
-  const tradeEligibleCount = allTokens.filter(t => t.status === 'TRADE_ELIGIBLE').length;
+  const rugcheckPendingCount = allTokens.filter(t => t.status === 'RUGCHECK_PENDING').length;
+  const buildingEmaCount = allTokens.filter(t => t.status === 'BUILDING_EMA').length;
+  const waitingForPumpCount = allTokens.filter(t => t.status === 'WAITING_FOR_PUMP').length;
+  const pumpTargetHitCount = allTokens.filter(t => t.status === 'PUMP_TARGET_HIT').length;
   const expiredCount = allTokens.filter(t => t.status === 'EXPIRED').length;
   const rejectedCount = allTokens.filter(t => t.status === 'REJECTED').length;
 
   const trackingTimesSec = allTokens.map(t => Math.floor((now - (t.firstDiscoveredAt || t.migrationTime || now)) / 1000));
   const avgTrackingTimeSec = trackingTimesSec.length > 0 ? Math.round(trackingTimesSec.reduce((a, b) => a + b, 0) / trackingTimesSec.length) : 0;
 
-  const sustainAttemptsList = allTokens.map(t => t.sustainAttempts || 0);
-  const avgSustainAttempts = sustainAttemptsList.length > 0 ? parseFloat((sustainAttemptsList.reduce((a, b) => a + b, 0) / sustainAttemptsList.length).toFixed(1)) : 0;
-
   return {
-    serverStartMs:    SERVER_START_MS,   // unix ms when this server process started — used by UI to filter diagnostics to current session
+    serverStartMs:    SERVER_START_MS,
     trackedTokens:    allTokens,
     openPositions:    Array.from(openPositions.values()),
-    closedPositions:  closedPositions.slice(0, 200),   // full history for accurate stats
+    closedPositions:  closedPositions.slice(0, 200),
     recentBuyLog:     buyLog.slice(0, 30),
     queuedSignals:    [...signalQueue],
     solPriceUsd:      cachedSolPrice,
     pendingCount:     pendingGraduations.size,
     gmgnConfigured:   isGmgnConfigured(),
-    gmgnBannedUntil:  getGmgnBannedUntil(), // unix ms; 0 if not currently rate-limit banned
+    gmgnBannedUntil:  getGmgnBannedUntil(),
     stats: {
       tracking:              trackedTokens.size,
       positions:             openPositions.size,
@@ -2831,16 +2818,14 @@ export function getSniperStatus() {
       pending:               pendingGraduations.size,
       discovered:            allTokens.length,
       rugcheckPassed:        rugcheckPassedCount,
-      waitingForThresholds:  waitingForThresholdsCount,
-      sustaining:            sustainingCount,
-      sustainCompleted:      sustainCompletedCount,
-      tradeEligible:         tradeEligibleCount,
+      rugcheckPending:       rugcheckPendingCount,
+      buildingEma:           buildingEmaCount,
+      waitingForPump:        waitingForPumpCount,
+      pumpTargetHit:         pumpTargetHitCount,
       tradesExecuted:        everTradedMints.size,
       expired:               expiredCount,
       rejected:              rejectedCount,
       avgTrackingTimeSec,
-      avgTimeToThresholdsSec: 180, // estimated 3m average
-      avgSustainAttempts,
     },
   };
 }
@@ -2935,11 +2920,90 @@ async function refreshTrackedTokensMarketData(): Promise<void> {
   }
 }
 
+function updateTokenCandle(tok: TrackedToken, price: number, mcap: number): void {
+  if (!price || price <= 0) return;
+  if (!tok.candles) tok.candles = [];
+
+  const now = Date.now();
+  const minute = Math.floor(now / 60000) * 60000;
+  const currentMcap = mcap > 0 ? mcap : (tok.mcap || 0);
+
+  let candle = tok.candles.find(c => c.minute === minute);
+  if (!candle) {
+    candle = {
+      minute,
+      open: price,
+      high: price,
+      low: price,
+      close: price,
+      openMcap: currentMcap,
+      highMcap: currentMcap,
+      lowMcap: currentMcap,
+      closeMcap: currentMcap,
+    };
+    tok.candles.push(candle);
+  } else {
+    candle.high = Math.max(candle.high, price);
+    candle.low = Math.min(candle.low, price);
+    candle.close = price;
+    if (currentMcap > 0) {
+      candle.highMcap = Math.max(candle.highMcap, currentMcap);
+      candle.lowMcap = Math.min(candle.lowMcap, currentMcap);
+      candle.closeMcap = currentMcap;
+    }
+  }
+
+  // Keep last 60 minutes of candles
+  const cutoff = minute - 60 * 60000;
+  tok.candles = tok.candles.filter(c => c.minute >= cutoff);
+}
+
+function computeEMA20(candles: TokenCandle[]): { emaPrice: number; emaMcap: number } | null {
+  if (!candles || candles.length < 20) return null;
+  const sorted = [...candles].sort((a, b) => a.minute - b.minute);
+  if (sorted.length < 20) return null;
+
+  const period = 20;
+  const k = 2 / (period + 1);
+
+  let emaPrice = sorted.slice(0, period).reduce((sum, c) => sum + c.close, 0) / period;
+  let emaMcap = sorted.slice(0, period).reduce((sum, c) => sum + c.closeMcap, 0) / period;
+
+  for (let i = period; i < sorted.length; i++) {
+    emaPrice = sorted[i].close * k + emaPrice * (1 - k);
+    emaMcap = sorted[i].closeMcap * k + emaMcap * (1 - k);
+  }
+
+  return { emaPrice, emaMcap };
+}
+
+function computeRecent20MinLow(candles: TokenCandle[], currentPrice: number, currentMcap: number): { lowPrice: number; lowMcap: number } {
+  if (!candles || candles.length === 0) {
+    return { lowPrice: currentPrice * 0.8, lowMcap: currentMcap * 0.8 };
+  }
+  const nowMinute = Math.floor(Date.now() / 60000) * 60000;
+  const cutoffMinute = nowMinute - 20 * 60000;
+  const recentCandles = candles.filter(c => c.minute >= cutoffMinute);
+
+  if (recentCandles.length === 0) {
+    return { lowPrice: currentPrice * 0.8, lowMcap: currentMcap * 0.8 };
+  }
+
+  let minLowPrice = Math.min(...recentCandles.map(c => c.low));
+  let minLowMcap = Math.min(...recentCandles.map(c => c.lowMcap));
+
+  if (minLowPrice <= 0 || !Number.isFinite(minLowPrice)) minLowPrice = currentPrice * 0.8;
+  if (minLowMcap <= 0 || !Number.isFinite(minLowMcap)) minLowMcap = currentMcap * 0.8;
+
+  return { lowPrice: minLowPrice, lowMcap: minLowMcap };
+}
+
 async function evaluateAllTrackedTokensSustainState(): Promise<void> {
   const s = await getSettings().catch(() => null);
-  const minLiq = s?.minLiquidity ?? 15000;
-  const minMc = s?.minMc ?? 30000;
-  const sustainDurationMs = (s?.sustainDurationSec ?? 600) * 1000;
+  const positionSize = s?.positionSizeSol ?? 0.10;
+  const emaPeriod = s?.emaPeriodMinutes ?? 20;
+  const pumpTargetPct = s?.pumpTargetPct ?? 50;
+  const fakeSetupSpikeCap = s?.fakeSetupSpikeCapUsd ?? 200000;
   const maxTrackingMs = (s?.maxTrackingDurationMin ?? 120) * 60 * 1000;
   const now = Date.now();
 
@@ -2951,143 +3015,177 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
       continue;
     }
 
-    // 2. If RugCheck explicitly failed
-    if (tok.rugcheckPassed === false) {
-      tok.status = 'REJECTED';
-      continue;
-    }
-
-    // 3. 2-hour Tracking Expiry check
+    // 2. 2-hour Tracking Expiry check
     const firstDiscovered = tok.firstDiscoveredAt || tok.migrationTime || now;
     const trackingAgeMs = now - firstDiscovered;
     if (trackingAgeMs >= maxTrackingMs) {
       if (tok.status !== 'EXPIRED') {
         tok.status = 'EXPIRED';
         void diagTokenExpired(tok.mint).catch(() => {});
-        if (!tok.expiredNotified) {
-          tok.expiredNotified = true;
-          // void notifyTrackingExpired({ symbol: tok.symbol });
-        }
-        logger.info({ mint: tok.mint.slice(0, 12), symbol: tok.symbol }, 'Sniper engine: tracking expired (2-hour limit reached)');
+        logger.info({ mint: tok.mint.slice(0, 12), symbol: tok.symbol }, 'Sniper engine: tracking expired (120-minute limit reached)');
         broadcastSniperStatus();
       }
       pruneToken(tok.mint);
       continue;
     }
 
-    // 4. Evaluate dual thresholds: MC >= minMc AND Liquidity >= minLiq
-    const currentMc = tok.mcap ?? 0;
-    const currentLiq = tok.liquidity ?? 0;
-    const thresholdsMet = currentMc >= minMc && currentLiq >= minLiq;
-
-    if (thresholdsMet) {
-      if (!tok.sustainStartedAt) {
-        // Start 10-minute sustain timer
-        tok.sustainStartedAt = now;
-        tok.status = 'SUSTAINING';
-        tok.sustainAttempts = (tok.sustainAttempts || 0) + 1;
-        tok.lastResetReason = null;
-        tok.resetNotified = false;
-
-        void diagTokenScanned(tok.mint, {
-          passedMc: true,
-          passedLiquidity: true,
-          currentMc,
-          currentLiquidity: currentLiq,
-        }).catch(() => {});
-
-        if (!tok.thresholdsNotified) {
-          tok.thresholdsNotified = true;
-          // void notifyThresholdsReached({
-          //   symbol: tok.symbol,
-          //   mc: currentMc,
-          //   liquidity: currentLiq,
-          //   elapsedMs: trackingAgeMs,
-          //   maxTrackingMs,
-          // });
-        }
-        logger.info(
-          { mint: tok.mint.slice(0, 12), symbol: tok.symbol, mc: currentMc.toFixed(0), liq: currentLiq.toFixed(0), attempt: tok.sustainAttempts },
-          'Sniper engine: 10-minute sustain timer started (both thresholds met)',
-        );
-        broadcastSniperStatus();
-      } else {
-        // Timer is running — check progress
-        const sustainedMs = now - tok.sustainStartedAt;
-        if (sustainedMs >= sustainDurationMs) {
-          // 10 continuous minutes completed!
-          tok.status = 'TRADE_ELIGIBLE';
-          if (!tok.completedNotified) {
-            tok.completedNotified = true;
-            // void notifySustainCompleted({
-            //   symbol: tok.symbol,
-            //   mc: currentMc,
-            //   liquidity: currentLiq,
-            // });
-          }
-          logger.info(
-            { mint: tok.mint.slice(0, 12), symbol: tok.symbol },
-            'Sniper engine: 10-minute sustain completed — token is TRADE_ELIGIBLE',
-          );
-          broadcastSniperStatus();
-
-          // Execute Trade Entry
-          if (!tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
-            tok.entryTriggered = true;
-            void enterSniperPosition(
-              tok.mint,
-              tok.name,
-              tok.symbol,
-              1,
-              currentMc,
-              tok.price ?? 0,
-              'migrated-strategy',
-              now,
-              1,
-              'consensus',
-              100,
-              1,
-              undefined,
-              [],
-            ).catch((err) => {
-              logger.warn({ err, mint: tok.mint }, 'Sniper engine: error executing trade entry after sustain completion');
-            });
-          }
-        } else {
-          tok.status = 'SUSTAINING';
-        }
+    // 3. Rugcheck evaluation & 5-min retry
+    if (tok.rugcheckPassed === false) {
+      if (tok.rugcheckRetryAt && now < tok.rugcheckRetryAt) {
+        tok.status = 'RUGCHECK_PENDING';
+        continue;
       }
-    } else {
-      // Thresholds are NOT currently met simultaneously
-      if (tok.sustainStartedAt) {
-        // Reset timer!
-        const failureReason = currentLiq < minLiq
-          ? `Liquidity dropped below $${(minLiq / 1000).toFixed(0)}K`
-          : `MC dropped below $${(minMc / 1000).toFixed(0)}K`;
-
-        tok.sustainStartedAt = null;
-        tok.thresholdsNotified = false;
-        tok.status = 'SUSTAIN_RESET';
-        tok.lastResetReason = failureReason;
-
-        if (!tok.resetNotified) {
-          tok.resetNotified = true;
-          // void notifySustainReset({
-          //   symbol: tok.symbol,
-          //   reason: failureReason,
-          //   mc: currentMc,
-          //   liquidity: currentLiq,
-          // });
+      if (tok.rugcheckRetryAt && now >= tok.rugcheckRetryAt && (tok.rugcheckAttempts || 0) < 2) {
+        tok.rugcheckAttempts = (tok.rugcheckAttempts || 0) + 1;
+        tok.rugcheckRetryAt = null;
+        logger.info({ mint: tok.mint.slice(0, 12), attempt: tok.rugcheckAttempts }, 'Sniper engine: retrying Rugcheck after 5-minute wait');
+        const passed = await checkRugcheck(tok.mint).catch(() => false);
+        tok.rugcheckPassed = passed;
+        if (!passed) {
+          tok.status = 'REJECTED';
+          tok.lastResetReason = 'Rugcheck Failed (2 attempts)';
+          void diagTokenRejected(tok.mint, 'Rugcheck Failed (2 attempts)').catch(() => {});
+          continue;
         }
+      } else {
+        tok.status = 'REJECTED';
+        tok.lastResetReason = 'Rugcheck Failed';
+        continue;
+      }
+    }
+
+    const currentPrice = tok.price ?? 0;
+    const currentMcap = tok.mcap ?? 0;
+    if (!tok.launchMcap && currentMcap > 0) tok.launchMcap = currentMcap;
+
+    // 4. Fake Setup Spike Check (within first 10s of migration)
+    const migrationAgeSec = (now - tok.migrationTime) / 1000;
+    if (migrationAgeSec <= 10 && currentMcap > 0) {
+      const launch = tok.launchMcap || currentMcap;
+      if (currentMcap >= fakeSetupSpikeCap || (launch <= 50000 && currentMcap >= launch * 5)) {
+        tok.status = 'REJECTED';
+        tok.lastResetReason = `Fake Setup - Instant Spike (${(currentMcap / 1000).toFixed(0)}k mcap in ${migrationAgeSec.toFixed(1)}s)`;
         logger.info(
-          { mint: tok.mint.slice(0, 12), symbol: tok.symbol, reason: failureReason },
-          'Sniper engine: sustain timer reset (threshold condition failed)',
+          { mint: tok.mint.slice(0, 12), symbol: tok.symbol, mcap: currentMcap, launchMcap: launch },
+          'Sniper engine: rejected fake setup (instant bot spike)',
+        );
+        void diagTokenRejected(tok.mint, tok.lastResetReason).catch(() => {});
+        continue;
+      }
+    }
+
+    // 5. Update candles & calculate 20 EMA
+    if (currentPrice > 0) {
+      updateTokenCandle(tok, currentPrice, currentMcap);
+    }
+
+    const candleCount = tok.candles ? tok.candles.length : 0;
+    tok.candlesCount = candleCount;
+
+    if (candleCount < emaPeriod) {
+      tok.status = 'BUILDING_EMA';
+      continue;
+    }
+
+    const emaRes = computeEMA20(tok.candles!);
+    if (!emaRes) {
+      tok.status = 'BUILDING_EMA';
+      continue;
+    }
+
+    tok.ema20 = Math.round(emaRes.emaPrice * 1e8) / 1e8;
+    tok.ema20Mcap = Math.round(emaRes.emaMcap);
+
+    if (!tok.emaStartMcap) {
+      tok.emaStartMcap = currentMcap > 0 ? currentMcap : emaRes.emaMcap;
+      tok.pumpTargetMcap = Math.round(tok.emaStartMcap * (1 + pumpTargetPct / 100));
+      tok.peakMcapSinceEma = currentMcap;
+      tok.pumpTargetHit = false;
+      tok.status = 'WAITING_FOR_PUMP';
+      logger.info(
+        {
+          mint: tok.mint.slice(0, 12),
+          symbol: tok.symbol,
+          emaStartMcap: (tok.emaStartMcap / 1000).toFixed(1) + 'k',
+          requiredTargetMcap: (tok.pumpTargetMcap / 1000).toFixed(1) + 'k',
+        },
+        'Sniper engine: 20 EMA plotted — waiting for min +50% price pump',
+      );
+      broadcastSniperStatus();
+      continue;
+    }
+
+    tok.peakMcapSinceEma = Math.max(tok.peakMcapSinceEma || 0, currentMcap);
+
+    if (!tok.pumpTargetHit) {
+      if (tok.peakMcapSinceEma >= (tok.pumpTargetMcap || 0)) {
+        tok.pumpTargetHit = true;
+        tok.status = 'PUMP_TARGET_HIT';
+        logger.info(
+          {
+            mint: tok.mint.slice(0, 12),
+            symbol: tok.symbol,
+            peakMcap: (tok.peakMcapSinceEma / 1000).toFixed(1) + 'k',
+            targetMcap: ((tok.pumpTargetMcap || 0) / 1000).toFixed(1) + 'k',
+          },
+          'Sniper engine: +50% pump target HIT! Watching for retrace to 20 EMA to buy',
         );
         broadcastSniperStatus();
       } else {
-        if (tok.rugcheckPassed) {
-          tok.status = 'WAITING_FOR_THRESHOLDS';
-        }
+        tok.status = 'WAITING_FOR_PUMP';
+        continue;
+      }
+    }
+
+    // 6. Retrace Buy Trigger: if pumpTargetHit is true, wait for price to retrace to 20 EMA
+    if (tok.pumpTargetHit && !tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
+      const atOrBelowEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20) ||
+                           (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap);
+
+      if (atOrBelowEma) {
+        tok.entryTriggered = true;
+        tok.status = 'TRADED';
+
+        const recentLow = computeRecent20MinLow(tok.candles!, currentPrice, currentMcap);
+        tok.recent20MinLowPrice = recentLow.lowPrice;
+        tok.recent20MinLowMcap = recentLow.lowMcap;
+
+        logger.info(
+          {
+            mint: tok.mint.slice(0, 12),
+            symbol: tok.symbol,
+            entryPrice: currentPrice,
+            entryMcap: (currentMcap / 1000).toFixed(1) + 'k',
+            ema20Mcap: ((tok.ema20Mcap || 0) / 1000).toFixed(1) + 'k',
+            sl20mLowMcap: (recentLow.lowMcap / 1000).toFixed(1) + 'k',
+            sizeSol: positionSize,
+          },
+          'Sniper engine: Retrace to 20 EMA detected! Triggering BUY order (0.10 SOL)',
+        );
+        broadcastSniperStatus();
+
+        void enterSniperPosition(
+          tok.mint,
+          tok.name,
+          tok.symbol,
+          1,
+          currentMcap,
+          currentPrice,
+          '20-ema-retrace',
+          now,
+          1,
+          'solo',
+          100,
+          1,
+          undefined,
+          [],
+          recentLow.lowPrice,
+          positionSize,
+        ).catch((err) => {
+          logger.warn({ err, mint: tok.mint }, 'Sniper engine: error executing 20 EMA retrace buy entry');
+        });
+      } else {
+        tok.status = 'PUMP_TARGET_HIT';
       }
     }
   }

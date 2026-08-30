@@ -284,121 +284,142 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
         );
       })()}
 
-      {/* Migrated Token Strategy settings banner */}
-      <Section title="Migrated Token Strategy Parameters" color="#00d4ff">
+      {/* 20 EMA Strategy Overview Banner */}
+      <div className="card" style={{ marginBottom: 14, padding: '16px', background: 'linear-gradient(135deg, rgba(168,85,247,0.08), rgba(0,212,255,0.08))', border: '1px solid rgba(168,85,247,0.25)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 16 }}>📈</span>
+          <span style={{ fontSize: 13, fontWeight: 900, color: '#a855f7', letterSpacing: '0.04em' }}>
+            20 EMA Retrace Strategy Overview
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: '#d4e0f0', lineHeight: 1.6 }}>
+          • <b>Tracking</b>: Tracks every Pump.fun migration for <b>120 minutes</b> before expiring.<br/>
+          • <b>Safety Checks</b>: Auto Rugcheck (retry after <b>5m</b> if failed) + Instant Fake Setup Spike filter (&gt;$200k mcap in 5s).<br/>
+          • <b>20 EMA &amp; +50% Pump</b>: Calculates 20 EMA on 1-min candles after 20m. Price must first pump <b>+50%</b> above EMA start price.<br/>
+          • <b>Entry &amp; SL</b>: Buys <b>0.10 SOL</b> immediately when price retraces to 20 EMA. Stop Loss is set to the <b>recent 20-min low</b>.<br/>
+          • <b>Exits</b>: <b>TP1 +100%</b> (30% exit, breakeven SL), <b>TP2 +250%</b> (40% exit, -30% trailing SL), <b>TP3 +400%</b> (30% exit).
+        </div>
+      </div>
+
+      {/* 20 EMA Strategy Parameters */}
+      <Section title="20 EMA Strategy Parameters" color="#a855f7">
         <NumberInput
-          label="Minimum Liquidity ($)"
-          value={n('minLiquidity') || 15000}
-          onChange={(v) => update('minLiquidity', v)}
-          min={1000} max={1000000} step={1000} suffix="USD"
-          sublabel="Token liquidity threshold required for sustain timer (Default: $15,000)"
+          label="Position Size (SOL)"
+          value={n('positionSizeSol') || 0.10}
+          onChange={(v) => update('positionSizeSol', v)}
+          min={0.01} max={10} step={0.01} suffix="SOL"
+          sublabel="SOL amount bought on 20 EMA retrace buy trigger (Default: 0.10 SOL)"
         />
         <NumberInput
-          label="Minimum Market Cap ($)"
-          value={n('minMc') || 30000}
-          onChange={(v) => update('minMc', v)}
-          min={5000} max={5000000} step={5000} suffix="USD"
-          sublabel="Token Market Cap threshold required for sustain timer (Default: $30,000)"
+          label="Required Pump Target (%)"
+          value={n('pumpTargetPct') || 50}
+          onChange={(v) => update('pumpTargetPct', v)}
+          min={10} max={500} step={5} suffix="%"
+          sublabel="Price/MCAP must increase by at least this % above 20 EMA start point before retrace buy unlocks (Default: 50%)"
         />
         <NumberInput
-          label="Sustain Gate Duration (Seconds)"
-          value={n('sustainDurationSec') || 600}
-          onChange={(v) => update('sustainDurationSec', v)}
-          min={60} max={7200} step={30} suffix="SEC"
-          sublabel="Continuous duration both Liquidity and MC thresholds must be sustained (Default: 600s / 10 min)"
+          label="EMA Period (Minutes / Candles)"
+          value={n('emaPeriodMinutes') || 20}
+          onChange={(v) => update('emaPeriodMinutes', v)}
+          min={5} max={60} step={1} suffix="MIN"
+          sublabel="Number of 1-minute candles required to plot EMA (Default: 20 minutes)"
         />
         <NumberInput
           label="Max Tracking Window (Minutes)"
           value={n('maxTrackingDurationMin') || 120}
           onChange={(v) => update('maxTrackingDurationMin', v)}
           min={15} max={1440} step={15} suffix="MIN"
-          sublabel="Maximum duration a token is tracked for threshold sustain before expiring (Default: 120m / 2 hours)"
+          sublabel="Maximum duration a token is tracked after migration before expiring (Default: 120m / 2 hours)"
+        />
+        <NumberInput
+          label="Rugcheck Retry Delay (Minutes)"
+          value={n('rugcheckRetryDelayMin') || 5}
+          onChange={(v) => update('rugcheckRetryDelayMin', v)}
+          min={1} max={30} step={1} suffix="MIN"
+          sublabel="Wait delay before retrying a failed initial Rugcheck (Default: 5 minutes)"
+        />
+        <NumberInput
+          label="Fake Setup Spike Cap ($ USD)"
+          value={n('fakeSetupSpikeCapUsd') || 200000}
+          onChange={(v) => update('fakeSetupSpikeCapUsd', v)}
+          min={50000} max={2000000} step={10000} suffix="USD"
+          sublabel="Tokens spiking above this MCAP within 5s of migration are rejected as fake bot setups (Default: $200,000)"
         />
       </Section>
 
-      <Section title="Position Sizing" color="#00ff88">
+      <Section title="Position Sizing & Portfolio" color="#00ff88">
         <NumberInput
           label="Starting Balance (SOL)"
           value={n('startingBalanceSol')}
           onChange={(v) => update('startingBalanceSol', v)}
           min={0.1} step={1} suffix="SOL"
-          sublabel="The total portfolio used to calculate % position sizes"
+          sublabel="The starting capital for paper portfolio value"
         />
         <NumberInput
           label="Current Balance (SOL)"
           value={n('currentBalanceSol')}
           onChange={(v) => update('currentBalanceSol', v)}
           min={0} step={0.1} suffix="SOL"
-          sublabel="Updates automatically when positions open/close in paper mode"
+          sublabel="Updates automatically when positions open/close"
         />
       </Section>
 
-      {/* Sniper TP Tiers */}
-      <Section title="Sniper TP Tiers" color="#ff9900">
+      {/* Target (TP) and Trailing SL Settings */}
+      <Section title="3-Phase Target (TP) & Trailing SL" color="#ff9900">
         <div style={{ fontSize: 11, color: '#3a5070', marginBottom: 14, lineHeight: 1.6 }}>
-          Each TP exits <b style={{ color: '#c0c8e0' }}>30% of the original position</b> → 10% runner held until trailing SL. Tier is set by 10-second rolling volume at detection.
+          Target exits position in 3 phases. TP1 moves SL to breakeven; TP2 activates a trailing SL from peak.
         </div>
 
-        {/* Tier header helper */}
-        {([
-          { label: 'Tier 1 — $750–$1499 vol',    k: 'wt1' as const, color: '#00d4ff' },
-          { label: 'Tier 2 — $1500–$2249 vol',   k: 'wt2' as const, color: '#9b59ff' },
-          { label: 'Tier 3 — $2250+ vol',         k: 'wt3' as const, color: '#ff9900' },
-        ] as const).map(({ label, k, color }) => (
-          <div key={k} style={{ marginBottom: 18 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <div style={{ width: 3, height: 12, borderRadius: 2, background: color }} />
-              <span style={{ fontSize: 11, fontWeight: 800, color, letterSpacing: '0.06em' }}>{label}</span>
-            </div>
+        {/* Column headers */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1.2fr', gap: 6, marginBottom: 6 }}>
+          {['Target Phase', 'Gain %', 'Exit %', 'SL Behavior'].map(h => (
+            <div key={h} style={{ fontSize: 10, color: '#2a3a50', fontWeight: 700, letterSpacing: '0.05em' }}>{h}</div>
+          ))}
+        </div>
 
-            {/* Column headers */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, marginBottom: 4 }}>
-              {['Level', 'Gain %', 'Exit %', 'SL Trail %'].map(h => (
-                <div key={h} style={{ fontSize: 10, color: '#2a3a50', fontWeight: 700, letterSpacing: '0.05em' }}>{h}</div>
-              ))}
-            </div>
+        {/* TP1 row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1.2fr', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+          <div style={{ fontSize: 11, color: '#00d4ff', fontWeight: 700 }}>TP1 (+100%)</div>
+          <input type="number" value={n('tp1Pct') || 100} min={10} max={500} step={5}
+            onChange={e => update('tp1Pct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <input type="number" value={n('tp1ExitPct') || 30} min={5} max={100} step={5}
+            onChange={e => update('tp1ExitPct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <div style={{ fontSize: 10, color: '#00ff88', fontWeight: 700 }}>Breakeven SL</div>
+        </div>
 
-            {/* TP1 row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-              <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700 }}>TP1</div>
-              <input type="number" value={n(`${k}Tp1Pct` as keyof Settings)} min={10} max={500} step={5}
-                onChange={e => update(`${k}Tp1Pct` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <input type="number" value={n(`${k}Tp1Exit` as keyof Settings)} min={5} max={50} step={5}
-                onChange={e => update(`${k}Tp1Exit` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <div style={{ fontSize: 10, color: '#3a5070', fontStyle: 'italic' }}>→ Breakeven</div>
-            </div>
+        {/* TP2 row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1.2fr', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+          <div style={{ fontSize: 11, color: '#9b59ff', fontWeight: 700 }}>TP2 (+250%)</div>
+          <input type="number" value={n('tp2Pct') || 250} min={20} max={1000} step={10}
+            onChange={e => update('tp2Pct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <input type="number" value={n('tp2ExitPct') || 40} min={5} max={100} step={5}
+            onChange={e => update('tp2ExitPct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <div style={{ fontSize: 10, color: '#9b59ff', fontWeight: 700 }}>Trail -30% Peak</div>
+        </div>
 
-            {/* TP2 row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-              <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700 }}>TP2</div>
-              <input type="number" value={n(`${k}Tp2Pct` as keyof Settings)} min={10} max={1000} step={5}
-                onChange={e => update(`${k}Tp2Pct` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <input type="number" value={n(`${k}Tp2Exit` as keyof Settings)} min={5} max={50} step={5}
-                onChange={e => update(`${k}Tp2Exit` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <input type="number" value={n(`${k}Tp2Trail` as keyof Settings)} min={5} max={50} step={5}
-                onChange={e => update(`${k}Tp2Trail` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-            </div>
+        {/* TP3 row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1.2fr', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+          <div style={{ fontSize: 11, color: '#ff9900', fontWeight: 700 }}>TP3 (+400%)</div>
+          <input type="number" value={n('tp3Pct') || 400} min={50} max={2000} step={25}
+            onChange={e => update('tp3Pct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <input type="number" value={n('tp3ExitPct') || 30} min={5} max={100} step={5}
+            onChange={e => update('tp3ExitPct', e.target.value)}
+            className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
+          <div style={{ fontSize: 10, color: '#ff9900', fontWeight: 700 }}>Close Position</div>
+        </div>
 
-            {/* TP3 row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center' }}>
-              <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700 }}>TP3 + Runner</div>
-              <input type="number" value={n(`${k}Tp3Pct` as keyof Settings)} min={10} max={2000} step={10}
-                onChange={e => update(`${k}Tp3Pct` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <input type="number" value={n(`${k}Tp3Exit` as keyof Settings)} min={5} max={50} step={5}
-                onChange={e => update(`${k}Tp3Exit` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-              <input type="number" value={n(`${k}Tp3Trail` as keyof Settings)} min={3} max={50} step={1}
-                onChange={e => update(`${k}Tp3Trail` as keyof Settings, e.target.value)}
-                className="input-premium" style={{ padding: '6px 8px', fontSize: 12 }} />
-            </div>
-          </div>
-        ))}
+        <NumberInput
+          label="Trailing Stop Loss (%)"
+          value={n('trailingSLPct') || 30}
+          onChange={(v) => update('trailingSLPct', v)}
+          min={5} max={50} step={1} suffix="%"
+          sublabel="Distance from peak price to trigger trailing SL exit after TP2 (Default: 30%)"
+        />
       </Section>
 
       <Section title="Stagnation Exit" color="#ff6600">

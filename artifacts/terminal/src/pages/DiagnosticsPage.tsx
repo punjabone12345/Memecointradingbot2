@@ -99,6 +99,10 @@ function FunnelBar({ label, count, total, color }: { label: string; count: numbe
 const STATUS_COLOR: Record<string, string> = {
   DISCOVERED:             '#a0b8d8',
   TRACKING:               '#00d4ff',
+  RUGCHECK_PENDING:       '#ffaa00',
+  BUILDING_EMA:           '#9b59ff',
+  WAITING_FOR_PUMP:       '#00bfff',
+  PUMP_TARGET_HIT:        '#a855f7',
   WAITING_FOR_THRESHOLDS: '#00bfff',
   SUSTAINING:             '#ffd700',
   SUSTAIN_RESET:          '#ffaa00',
@@ -112,12 +116,16 @@ const STATUS_COLOR: Record<string, string> = {
 const STATUS_ICON: Record<string, string> = {
   DISCOVERED:             '🔍',
   TRACKING:               '👀',
+  RUGCHECK_PENDING:       '⏳',
+  BUILDING_EMA:           '📊',
+  WAITING_FOR_PUMP:       '🚀',
+  PUMP_TARGET_HIT:        '🎯',
   WAITING_FOR_THRESHOLDS: '⏳',
   SUSTAINING:             '⏱',
   SUSTAIN_RESET:          '🔄',
   SUSTAIN_COMPLETED:      '✅',
   TRADE_ELIGIBLE:         '🎯',
-  TRADED:                 '🚀',
+  TRADED:                 '⚡',
   EXPIRED:                '⏰',
   REJECTED:               '❌',
 };
@@ -127,7 +135,7 @@ const STATUS_ICON: Record<string, string> = {
 function FunnelPanel({ funnel }: { funnel: DiagFunnelStats | null }) {
   if (!funnel) return (
     <div style={{ ...C.card, marginBottom: 10 }}>
-      <SectionHeader title="📊 Discovery Funnel (Session / 7 Days)" />
+      <SectionHeader title="📊 20 EMA Strategy Funnel (Session / 7 Days)" />
       <div style={{ padding: 24, textAlign: 'center', color: C.gray, fontSize: 11 }}>Loading funnel stats…</div>
     </div>
   );
@@ -136,23 +144,22 @@ function FunnelPanel({ funnel }: { funnel: DiagFunnelStats | null }) {
   const steps = [
     { label: '1. Discovered (Pump.fun Migrations)', count: parseInt(funnel.total ?? '0', 10),              color: C.blue },
     { label: '2. Passed RugCheck Safety Filter',  count: parseInt(funnel.passed_rugcheck ?? '0', 10),     color: '#00bfff' },
-    { label: '3. Reached Tracking Stage',          count: parseInt(funnel.tracking ?? '0', 10),            color: C.purple },
-    { label: '4. Reached $30K MC + $15K Liquidity',count: parseInt(funnel.thresholds_reached ?? '0', 10),  color: C.yellow },
-    { label: '5. 10-Minute Sustain Started',       count: parseInt(funnel.sustain_started ?? '0', 10),     color: '#ffa500' },
-    { label: '6. Sustain Completed / Eligible',    count: parseInt(funnel.trade_eligible ?? '0', 10),      color: '#00ff88' },
-    { label: '7. Executed Sniper Trade',           count: parseInt(funnel.traded ?? '0', 10),              color: C.green },
+    { label: '3. 20 EMA Initialized (20m Candles)', count: parseInt(funnel.tracking ?? '0', 10),            color: C.purple },
+    { label: '4. Pump Target Hit (+50% above EMA)',count: parseInt(funnel.thresholds_reached ?? '0', 10),  color: C.yellow },
+    { label: '5. Retrace to 20 EMA Triggered',     count: parseInt(funnel.trade_eligible ?? '0', 10),      color: '#a855f7' },
+    { label: '6. Executed 0.10 SOL Buy Entry',    count: parseInt(funnel.traded ?? '0', 10),              color: C.green },
   ];
 
   const rejBreakdown = [
-    { label: 'RugCheck / Freeze / Mint Risk', count: parseInt(funnel.rejected_rugcheck ?? '0', 10),     color: C.red },
-    { label: 'Sustain Resets (MC/Liq Drop)', count: parseInt(funnel.rejected_sustain_reset ?? '0', 10), color: C.orange },
-    { label: '2-Hour Tracking Expirations',  count: parseInt(funnel.expired ?? '0', 10),                color: C.gray },
-    { label: 'Other Rejections',             count: parseInt(funnel.rejected_other ?? '0', 10),          color: '#6688aa' },
+    { label: 'RugCheck Failed (2 Attempts)', count: parseInt(funnel.rejected_rugcheck ?? '0', 10),     color: C.red },
+    { label: 'Fake Setup Spike (>200k in 5s)',  count: parseInt(funnel.rejected_sustain_reset ?? '0', 10), color: C.orange },
+    { label: '120-Min Tracking Expirations',   count: parseInt(funnel.expired ?? '0', 10),                color: C.gray },
+    { label: 'Other Rejections',               count: parseInt(funnel.rejected_other ?? '0', 10),          color: '#6688aa' },
   ];
 
   return (
     <div style={{ ...C.card, marginBottom: 10 }}>
-      <SectionHeader title="📊 Discovery Funnel (Session / 7 Days)" sub="Progression through RugCheck, $30K MC + $15K Liq thresholds, and 10-min sustain gate" />
+      <SectionHeader title="📊 20 EMA Strategy Funnel (Session / 7 Days)" sub="Pipeline: Pump.fun Graduation → Rugcheck & Fake Setup Check → 20m EMA Plotting → +50% Pump Target → 20 EMA Retrace Buy (0.10 SOL)" />
       <div style={{ padding: '14px 16px' }}>
         {steps.map(s => <FunnelBar key={s.label} label={s.label} count={s.count} total={total} color={s.color} />)}
         <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>

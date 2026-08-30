@@ -15,6 +15,15 @@ export interface Settings {
   tradingWindowEnabled: boolean;
   tradingWindowStart: string;  // HH:MM in IST, e.g. "17:00"
   tradingWindowEnd: string;    // HH:MM in IST, e.g. "00:00" means midnight (end of day)
+  // 20 EMA Strategy Configs
+  positionSizeSol: number;
+  emaPeriodMinutes: number;
+  pumpTargetPct: number;
+  rugcheckRetryDelayMin: number;
+  fakeSetupSpikeCapUsd: number;
+  tp1Pct: number;  tp1ExitPct: number;
+  tp2Pct: number;  tp2ExitPct: number;  trailingSLPct: number;
+  tp3Pct: number;  tp3ExitPct: number;
   // Sniper TP tier configs ($500-$999 / $1000-$1999 / $2000+)
   wt1Tp1Pct: number;  wt1Tp1Exit: number;
   wt1Tp2Pct: number;  wt1Tp2Exit: number;  wt1Tp2Trail: number;

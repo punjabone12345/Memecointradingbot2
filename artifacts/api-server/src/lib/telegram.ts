@@ -196,20 +196,23 @@ export async function notifyTrackingExpired(params: {
 export async function notifySniperTrade(params: {
   name: string; symbol: string; mint: string;
   sizeSol: number; entryPrice: number; entryMcap?: number; liquidity?: number;
-  buyAmountUsd?: number; sizePct?: number; priceAtBuyDetection?: number;
-  slippagePct?: number; buyerWallet?: string; qualifyingWallets?: string[];
-  entryMode?: string; entryScore?: number; qualifyingWalletsCount?: number;
-  priceSource?: string; tpTier?: number;
+  ema20Mcap?: number; slMcap?: number; slPrice?: number;
 }): Promise<void> {
-  const { name, symbol, mint, sizeSol, entryPrice, entryMcap = 0, liquidity = 0 } = params;
-  const mcStr = entryMcap > 0 ? `$${entryMcap.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : 'N/A';
-  const liqStr = liquidity > 0 ? `$${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : 'N/A';
+  const { name, symbol, mint, sizeSol, entryPrice, entryMcap = 0, liquidity = 0, ema20Mcap = 0, slMcap = 0, slPrice = 0 } = params;
+  const mcStr = entryMcap > 0 ? `$${(entryMcap / 1000).toFixed(1)}k` : 'N/A';
+  const liqStr = liquidity > 0 ? `$${(liquidity / 1000).toFixed(1)}k` : 'N/A';
+  const emaStr = ema20Mcap > 0 ? `$${(ema20Mcap / 1000).toFixed(1)}k` : 'N/A';
+  const slStr = slMcap > 0 ? `$${(slMcap / 1000).toFixed(1)}k` : slPrice > 0 ? `$${formatPrice(slPrice)}` : 'Recent 20m Low';
+
   await sendMessage(
-    `🎯 <b>TRADE EXECUTED — ${symbol}</b> (${name})\n` +
+    `🎯 <b>20 EMA RETRACE BUY — ${symbol}</b> (${name})\n` +
+    `Strategy: 20 EMA Retrace (Pump Target +50% Hit)\n` +
     `CA: <code>${mint}</code>\n` +
     `Entry MC: ${mcStr}\n` +
+    `20 EMA Level: ${emaStr}\n` +
+    `Initial SL: ${slStr} (Recent 20m Low)\n` +
     `Liquidity: ${liqStr}\n` +
-    `Position Size: ${sizeSol.toFixed(3)} SOL\n` +
+    `Position Size: ${sizeSol.toFixed(2)} SOL\n` +
     `Entry Price: $${formatPrice(entryPrice)}\n` +
     `Time: ${toIST(new Date())}`
   );
@@ -223,10 +226,10 @@ export async function notifySniperClose(params: {
   const { name, symbol, mint, pnlPct, pnlSol, reason, entryPrice, exitPrice, sizeSol } = params;
   const emoji = pnlPct >= 0 ? '🟢' : '🔴';
   await sendMessage(
-    `${emoji} <b>WHALE CLOSE — ${symbol}</b> (${name})\n` +
+    `${emoji} <b>POSITION CLOSED — ${symbol}</b> (${name})\n` +
     `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
-    `PNL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%  (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
-    `Entry: $${formatPrice(entryPrice)}  →  Exit: $${formatPrice(exitPrice)}\n` +
+    `PNL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
+    `Entry: $${formatPrice(entryPrice)} → Exit: $${formatPrice(exitPrice)}\n` +
     `Size: ${sizeSol.toFixed(3)} SOL\n` +
     `Reason: ${reason}\n` +
     `Time: ${toIST(new Date())}`
@@ -247,13 +250,15 @@ export async function notifySniperTP(params: {
           entryPrice, currentPrice, totalBanked } = params;
   const profitSol = returnedSol - chunkSol;
   const pctRemaining = initialSizeSol > 0 ? ((remainingSizeSol / initialSizeSol) * 100).toFixed(0) : '?';
+  const targetLabel = tpNum === 1 ? 'TP1 (+100%)' : tpNum === 2 ? 'TP2 (+250%)' : 'TP3 (+400%)';
+
   await sendMessage(
-    `🎯 <b>WHALE TP${tpNum} — ${symbol}</b> (${name})\n` +
+    `🚀 <b>20 EMA ${targetLabel} HIT — ${symbol}</b> (${name})\n` +
     `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
-    `Gain: +${gainPct.toFixed(1)}%  (Entry $${formatPrice(entryPrice)} → $${formatPrice(currentPrice)})\n` +
-    `Sold: ${chunkSol.toFixed(4)} SOL → ${returnedSol.toFixed(4)} SOL (+${profitSol.toFixed(4)} profit)\n` +
+    `Gain: +${gainPct.toFixed(1)}% (Entry $${formatPrice(entryPrice)} → Current $${formatPrice(currentPrice)})\n` +
+    `Sold Chunk: ${chunkSol.toFixed(4)} SOL → ${returnedSol.toFixed(4)} SOL (+${profitSol.toFixed(4)} profit)\n` +
     `Remaining: ${pctRemaining}% of position (${remainingSizeSol.toFixed(4)} SOL)\n` +
-    `Total banked: ${totalBanked.toFixed(4)} SOL\n` +
+    `Total Banked: ${totalBanked.toFixed(4)} SOL\n` +
     `New SL: $${formatPrice(newSLPrice)} (${newSLDesc})\n` +
     `Time: ${toIST(new Date())}`
   );

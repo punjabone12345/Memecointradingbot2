@@ -12,6 +12,15 @@ export interface Settings {
   tradingWindowEnabled: boolean;
   tradingWindowStart: string;  // HH:MM in IST, e.g. "17:00"
   tradingWindowEnd: string;    // HH:MM in IST, e.g. "00:00" means midnight (end of day)
+  // 20 EMA Strategy Configs
+  positionSizeSol: number;
+  emaPeriodMinutes: number;
+  pumpTargetPct: number;
+  rugcheckRetryDelayMin: number;
+  fakeSetupSpikeCapUsd: number;
+  tp1Pct: number;  tp1ExitPct: number;
+  tp2Pct: number;  tp2ExitPct: number;  trailingSLPct: number;
+  tp3Pct: number;  tp3ExitPct: number;
   // Sniper TP tier configs (10s vol $750-$1499 / $1500-$2249 / $2250+)
   wt1Tp1Pct: number;  wt1Tp1Exit: number;
   wt1Tp2Pct: number;  wt1Tp2Exit: number;  wt1Tp2Trail: number;
@@ -38,6 +47,14 @@ export interface BuyerActivity {
   priceAtDetection: number;
 }
 
+export interface TokenCandle {
+  minute: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export interface TrackedToken {
   mint: string;
   name: string;
@@ -50,10 +67,21 @@ export interface TrackedToken {
   buyerActivity: BuyerActivity[];
   // Strategy Tracking State
   rugcheckPassed?: boolean;
+  rugcheckAttempts?: number;
+  rugcheckRetryAt?: number | null;
+  launchMcap?: number;
+  candlesCount?: number;
+  ema20?: number | null;
+  emaStartMcap?: number | null;
+  pumpTargetMcap?: number | null;
+  peakMcapSinceEma?: number;
+  pumpTargetHit?: boolean;
+  recent20MinLowMcap?: number;
+  recent20MinLowPrice?: number;
   sustainStartedAt?: number | null;
   sustainAttempts?: number;
   lastResetReason?: string | null;
-  status?: 'TRACKING' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
+  status?: 'TRACKING' | 'RUGCHECK_PENDING' | 'BUILDING_EMA' | 'WAITING_FOR_PUMP' | 'PUMP_TARGET_HIT' | 'WAITING_FOR_THRESHOLDS' | 'SUSTAINING' | 'SUSTAIN_RESET' | 'SUSTAIN_COMPLETED' | 'TRADE_ELIGIBLE' | 'TRADED' | 'EXPIRED' | 'REJECTED' | 'DISCOVERED';
   // Live market data
   dexId?: string;
   price?: number;
