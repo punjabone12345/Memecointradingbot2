@@ -54,21 +54,19 @@ const MIGRATE_PATTERNS: RegExp[] = [
 
 // ── RPC helpers ───────────────────────────────────────────────────────────────
 
-function heliusRpcUrl(): string {
-  const k = process.env.HELIUS_API_KEY;
-  return k
-    ? `https://mainnet.helius-rpc.com/?api-key=${k}`
-    : 'https://api.mainnet-beta.solana.com';
-}
-
-const PUBLIC_RPC = 'https://api.mainnet-beta.solana.com';
+const RPC_ENDPOINTS = [
+  process.env.HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}` : null,
+  'https://solana-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean) as string[];
 
 async function rpcPost(url: string, method: string, params: unknown[]): Promise<any> {
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(6_000),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const json = (await resp.json()) as { result?: any; error?: { message: string } };
@@ -78,7 +76,7 @@ async function rpcPost(url: string, method: string, params: unknown[]): Promise<
 
 type SigInfo = { signature: string; slot: number; err: any };
 
-/** Single-page getSignaturesForAddress — raw RPC call with Helius→public fallback */
+/** Single-page getSignaturesForAddress — raw RPC call with multi-RPC pool fallback */
 async function fetchSigPage(
   wallet: string,
   opts: { limit: number; until?: string; before?: string },
@@ -87,23 +85,19 @@ async function fetchSigPage(
   if (opts.until)  config.until  = opts.until;
   if (opts.before) config.before = opts.before;
 
-  try {
-    const result = await withHeliusLimit(
-      () => rpcPost(heliusRpcUrl(), 'getSignaturesForAddress', [wallet, config]),
-      { priority: false },
-    );
-    return Array.isArray(result) ? result : [];
-  } catch (err) {
-    if (isRateLimitedError(err)) {
-      try {
-        const result = await rpcPost(PUBLIC_RPC, 'getSignaturesForAddress', [wallet, config]);
-        return Array.isArray(result) ? result : [];
-      } catch {
-        return null;
-      }
+  // Try Helius first if available, then fallback to public RPC pool
+  for (const endpoint of RPC_ENDPOINTS) {
+    try {
+      const isHelius = endpoint.includes('helius');
+      const call = () => rpcPost(endpoint, 'getSignaturesForAddress', [wallet, config]);
+      const result = isHelius ? await withHeliusLimit(call, { priority: false }) : await call();
+      if (Array.isArray(result)) return result;
+    } catch {
+      // Try next endpoint in pool
+      continue;
     }
-    return null;
   }
+  return null;
 }
 
 /**
@@ -152,25 +146,20 @@ async function getAllNewSigs(
   return collected.reverse();
 }
 
-/** getTransaction with v0 support */
+/** getTransaction with v0 support and multi-RPC pool fallback */
 async function getTransaction(sig: string): Promise<any | null> {
   const config = { maxSupportedTransactionVersion: 0, commitment: 'confirmed', encoding: 'jsonParsed' };
-  try {
-    const result = await withHeliusLimit(
-      () => rpcPost(heliusRpcUrl(), 'getTransaction', [sig, config]),
-      { priority: false },
-    );
-    return result ?? null;
-  } catch (err) {
-    if (isRateLimitedError(err)) {
-      try {
-        return await rpcPost(PUBLIC_RPC, 'getTransaction', [sig, config]) ?? null;
-      } catch {
-        return null;
-      }
+  for (const endpoint of RPC_ENDPOINTS) {
+    try {
+      const isHelius = endpoint.includes('helius');
+      const call = () => rpcPost(endpoint, 'getTransaction', [sig, config]);
+      const result = isHelius ? await withHeliusLimit(call, { priority: false }) : await call();
+      if (result) return result;
+    } catch {
+      continue;
     }
-    return null;
   }
+  return null;
 }
 
 // ── Mint extraction ───────────────────────────────────────────────────────────

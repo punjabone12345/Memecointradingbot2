@@ -544,8 +544,8 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
       <div style={{ ...C.card, marginBottom: 16, background: 'linear-gradient(135deg,rgba(0,191,255,0.06),rgba(123,94,167,0.06))', borderColor: 'rgba(0,191,255,0.2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 900, color: C.accent, letterSpacing: '0.04em' }}>🚀 MIGRATED TOKEN STRATEGY</div>
-            <div style={{ fontSize: 9, color: C.gray, marginTop: 2 }}>Pump.fun Migrations · $30K MC + $15K Liquidity · 10-Min Sustain Gate</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: C.accent, letterSpacing: '0.04em' }}>🚀 20 EMA RETRACE STRATEGY</div>
+            <div style={{ fontSize: 9, color: C.gray, marginTop: 2 }}>Pump.fun Migrations · 20-Min 1m EMA · Min +50% Pump · 20 EMA Retrace Entry</div>
           </div>
           <div style={{ textAlign: 'right', fontSize: 9, color: C.gray }}>
             SOL<br />
@@ -557,8 +557,8 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', padding: '10px 0', borderTop: '1px solid rgba(255,255,255,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)', gap: 4 }}>
           <StatPill label="Discovered"  value={stats.discovered ?? stats.pending ?? 0} color={C.accent} />
           <StatPill label="Tracking"    value={stats.tracking ?? tracked.length} />
-          <StatPill label="Sustaining"  value={stats.sustaining ?? 0}                  color={C.yellow} />
-          <StatPill label="Eligible"    value={stats.tradeEligible ?? 0}               color={C.green} />
+          <StatPill label="Building EMA" value={stats.sustaining ?? 0}                  color={C.yellow} />
+          <StatPill label="Target Hit"  value={stats.tradeEligible ?? 0}               color={C.purple} />
           <StatPill label="Traded"      value={stats.tradesExecuted ?? 0}              color="#00ff88" />
         </div>
 
@@ -566,10 +566,11 @@ export default function DiscoverPage({ sniperStatus: wsProp, wsConnected = false
           {[
             { label: 'Pump.fun Migrations',    color: 'rgba(168,85,247,0.18)' },
             { label: 'RugCheck Filter',        color: 'rgba(0,255,136,0.15)' },
-            { label: 'MC ≥ $30,000',           color: 'rgba(0,191,255,0.18)' },
-            { label: 'Liq ≥ $15,000',          color: 'rgba(0,191,255,0.18)' },
-            { label: '10-Min Continuous Gate', color: 'rgba(255,215,0,0.18)' },
-            { label: '2-Hour Window Cap',      color: 'rgba(255,255,255,0.08)' },
+            { label: '20-Min 1m EMA Plotting', color: 'rgba(0,191,255,0.18)' },
+            { label: 'Min +50% Pump Target',   color: 'rgba(255,215,0,0.18)' },
+            { label: '20 EMA Retrace Buy',     color: 'rgba(0,255,136,0.18)' },
+            { label: 'Recent 20m Low SL',      color: 'rgba(255,68,102,0.18)' },
+            { label: '120-Min Tracking Cap',   color: 'rgba(255,255,255,0.08)' },
           ].map(({ label, color }) => (
             <span key={label} style={{ fontSize: 8, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: color, color: '#c0c8e0', border: '1px solid rgba(255,255,255,0.08)' }}>{label}</span>
           ))}

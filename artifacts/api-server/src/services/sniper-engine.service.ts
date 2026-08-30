@@ -1048,7 +1048,7 @@ export async function restoreSniperPositionsFromDB(): Promise<void> {
         bankedSol:        Number(r.banked_sol ?? 0),
         tpTier:           (Number(r.tp_tier ?? 1) as 1 | 2 | 3),
         triggerAmountUsd: Number(r.trigger_amount_usd ?? 0),
-        currentSLPrice:   storedSL > 0 ? storedSL : entryP * (1 - PRICE_SL_PCT),
+        currentSLPrice:   storedSL > 0 ? storedSL : entryP * 0.90,
         buyDetectedTimestamp: r.buy_detected_timestamp ? Number(r.buy_detected_timestamp) : undefined,
         entryDelayMs:      r.entry_delay_ms ? Number(r.entry_delay_ms) : undefined,
         entryMode:         r.entry_mode ?? undefined,
@@ -1261,10 +1261,12 @@ async function enterSniperPosition(
     const sizeSol = overrideSizeSol ?? configuredSizeSol;
     const liquidity = liquidityAtEntry;
 
-    // Initial SL: recent 20-minute low price (capped at max 98% of entry price to avoid instant stop out)
+    // Initial SL: recent 20-minute low price
     const initialSL = overrideInitialSLPrice && overrideInitialSLPrice > 0
-      ? Math.min(overrideInitialSLPrice, finalEntryPrice * 0.98)
-      : finalEntryPrice * (1 - PRICE_SL_PCT);
+      ? Math.min(overrideInitialSLPrice, finalEntryPrice * 0.99)
+      : (tok?.recent20MinLowPrice && tok.recent20MinLowPrice > 0
+          ? Math.min(tok.recent20MinLowPrice, finalEntryPrice * 0.99)
+          : finalEntryPrice * 0.90);
 
     const pos: SniperPosition = {
       id: `${mint}-${Date.now()}`,
@@ -1444,23 +1446,8 @@ function enqueueSignal(
 }
 
 async function processQueue(): Promise<void> {
-  // Don't dequeue if we're outside the trading window
-  let s: Awaited<ReturnType<typeof getSettings>>;
-  try {
-    s = await getSettings();
-    if (!isInTradingWindow(s)) return;
-  } catch { return; }
-
-  while (signalQueue.length > 0 && openPositions.size < (s.maxOpenPositions ?? 5)) {
-    const sig = signalQueue.shift()!;
-    const tok  = trackedTokens.get(sig.mint);
-    if (!tok || Date.now() > tok.expiresAt) continue;
-    if (openPositions.has(sig.mint) || everTradedMints.has(sig.mint) || slippageSkippedMints.has(sig.mint)) continue;
-    await enterSniperPosition(
-      sig.mint, sig.name, sig.symbol, sig.sizePct, sig.triggerAmountUsd, sig.priceAtDetection, sig.buyerWallet, sig.buyDetectedTimestamp, sig.tpTier,
-      sig.entryMode, sig.entryScore, sig.qualifyingWalletsCount, sig.maxSlippagePctAtQueue, sig.qualifyingWallets,
-    );
-  }
+  // Clearing legacy signalQueue — 20 EMA Retrace strategy manages entries directly via candle evaluation
+  signalQueue.length = 0;
 }
 
 // ── Smart Wallet Consensus — buy-detection handler ────────────────────────────
@@ -1808,16 +1795,11 @@ async function handleVolumeUpdate(
     return;
   }
 
-  entry.entered = true;
-  entry.skipReason = modeLabel;
+  entry.entered = false;
+  entry.skipReason = '20 EMA Strategy Active — entries strictly managed via 20 EMA retrace';
   buyLog.unshift(entry);
   if (buyLog.length > MAX_BUY_LOG) buyLog.pop();
-  persistAudit('ENTERED', modeLabel, result.mode, result.qualifyingWallets.length);
   broadcastSniperStatus();
-  await enterSniperPosition(
-    mint, tok.name, tok.symbol, result.sizePct, txUsd, priceAtDetection, wallet, txTimestamp, result.tpTier,
-    result.mode as 'solo' | 'consensus', result.score, result.qualifyingWallets.length, undefined, result.qualifyingWallets,
-  );
 }
 
 // ── Buy polling ───────────────────────────────────────────────────────────────
@@ -2232,7 +2214,7 @@ async function monitorPositions(): Promise<void> {
         if (pos.tp3Hit)      slReason = `Runner SL (-${cfg.tp3Trail}% from peak)`;
         else if (pos.tp2Hit) slReason = `Trailing SL (-${cfg.tp2Trail}% from peak)`;
         else if (pos.tp1Hit) slReason = 'Breakeven SL';
-        else                 slReason = `-${(PRICE_SL_PCT * 100).toFixed(0)}% hard stop loss`;
+        else                 slReason = `20-Min Low Stop Loss ($${formatPrice(pos.currentSLPrice)})`;
         await closeSniperPosition(pos, slReason);
         continue;
       }
@@ -3097,9 +3079,9 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
     tok.ema20Mcap = Math.round(emaRes.emaMcap);
 
     if (!tok.emaStartMcap) {
-      tok.emaStartMcap = currentMcap > 0 ? currentMcap : emaRes.emaMcap;
-      tok.pumpTargetMcap = Math.round(tok.emaStartMcap * (1 + pumpTargetPct / 100));
-      tok.peakMcapSinceEma = currentMcap;
+      tok.emaStartMcap = emaRes.emaMcap;
+      tok.pumpTargetMcap = Math.round(emaRes.emaMcap * (1 + pumpTargetPct / 100));
+      tok.peakMcapSinceEma = Math.max(currentMcap, emaRes.emaMcap);
       tok.pumpTargetHit = false;
       tok.status = 'WAITING_FOR_PUMP';
       logger.info(
@@ -3139,8 +3121,8 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
 
     // 6. Retrace Buy Trigger: if pumpTargetHit is true, wait for price to retrace to 20 EMA
     if (tok.pumpTargetHit && !tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
-      const atOrBelowEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20) ||
-                           (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap);
+      const atOrBelowEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20 * 1.005) ||
+                           (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap * 1.005);
 
       if (atOrBelowEma) {
         tok.entryTriggered = true;
@@ -3149,6 +3131,8 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
         const recentLow = computeRecent20MinLow(tok.candles!, currentPrice, currentMcap);
         tok.recent20MinLowPrice = recentLow.lowPrice;
         tok.recent20MinLowMcap = recentLow.lowMcap;
+
+        const initialSLPrice = Math.min(recentLow.lowPrice, currentPrice * 0.99);
 
         logger.info(
           {
@@ -3179,7 +3163,7 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
           1,
           undefined,
           [],
-          recentLow.lowPrice,
+          initialSLPrice,
           positionSize,
         ).catch((err) => {
           logger.warn({ err, mint: tok.mint }, 'Sniper engine: error executing 20 EMA retrace buy entry');
@@ -3243,133 +3227,7 @@ async function verifyWalletsStillHolding(mint: string, wallets: string[], consen
 }
 
 async function processPendingConsensusSignals(): Promise<void> {
-  if (pendingConsensusSignals.size === 0) return;
-  const now = Date.now();
-
-  for (const [mint, pending] of Array.from(pendingConsensusSignals.entries())) {
-    const elapsedMs = now - pending.consensusTimestamp;
-    if (elapsedMs > PENDING_CONSENSUS_TTL_MS) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol, elapsedMin: (elapsedMs / 60_000).toFixed(1) },
-        'CONSENSUS EXPIRED: pending consensus signal expired after 20m',
-      );
-      pendingConsensusSignals.delete(mint);
-      continue;
-    }
-
-    const tok = trackedTokens.get(mint);
-    let currentLiq = tok?.liquidity ?? 0;
-
-    if (currentLiq < 25_000 && tok?.poolAddress) {
-      try {
-        await fetchSolPrice();
-        const onChainLiq = await fetchOnChainLiqUsd(tok.poolAddress, cachedSolPrice);
-        if (onChainLiq > 0) {
-          currentLiq = onChainLiq;
-          if (tok) tok.liquidity = onChainLiq;
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    if (currentLiq < 25_000) continue;
-
-    logger.info(
-      { mint: mint.slice(0, 12), symbol: pending.symbol, liquidity: currentLiq.toFixed(0) },
-      'LIQUIDITY REACHED: liquidity reached $25k threshold',
-    );
-
-    logger.info(
-      { mint: mint.slice(0, 12), symbol: pending.symbol, wallets: pending.qualifyingWallets.map(w => w.slice(0, 12)) },
-      'WALLET VALIDATION: checking if qualifying wallets are still holding',
-    );
-
-    const stillHolding = await verifyWalletsStillHolding(mint, pending.qualifyingWallets, pending.consensusTimestamp);
-    if (!stillHolding) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol },
-        'WALLET VALIDATION: failed — qualifying wallet no longer holding, cancelling pending signal',
-      );
-      pendingConsensusSignals.delete(mint);
-      continue;
-    }
-
-    logger.info(
-      { mint: mint.slice(0, 12), symbol: pending.symbol },
-      'WALLET VALIDATION: passed — all qualifying wallets are still holding',
-    );
-
-    if (openPositions.has(mint) || tok?.entryTriggered || entryLocks.has(mint) || everTradedMints.has(mint) || slippageSkippedMints.has(mint)) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol },
-        'Deferred entry skipped: token already traded or entry in progress',
-      );
-      pendingConsensusSignals.delete(mint);
-      continue;
-    }
-
-    const poolBornMs = Math.min(
-      tok?.migrationTime ?? Infinity,
-      tok?.pairCreatedAt && tok.pairCreatedAt > 0 ? tok.pairCreatedAt : Infinity,
-    );
-    const ageMinutes = (Date.now() - poolBornMs) / 60_000;
-    if (ageMinutes < 10) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol, ageMin: ageMinutes.toFixed(1) },
-        'Deferred entry waiting: token too new (< 10 min age)',
-      );
-      continue;
-    }
-
-    const freezable = await isMintFreezable(mint);
-    if (freezable) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol },
-        'Deferred entry skipped: token is freezable',
-      );
-      pendingConsensusSignals.delete(mint);
-      continue;
-    }
-
-    const currentPrice = tok?.price ?? pending.priceAtDetection;
-    if (currentPrice > 0 && currentPrice >= 0.001) {
-      logger.info(
-        { mint: mint.slice(0, 12), symbol: pending.symbol, price: currentPrice },
-        'Deferred entry skipped: price >= $0.001 filter',
-      );
-      pendingConsensusSignals.delete(mint);
-      continue;
-    }
-
-    logger.info(
-      { mint: mint.slice(0, 12), symbol: pending.symbol },
-      'DEFERRED ENTRY: executing deferred consensus trade',
-    );
-
-    let maxSlippageForQueue = 20;
-    let maxOpenPositions = 5;
-    try {
-      const s = await getSettings();
-      maxSlippageForQueue = s.sniperSlippagePct ?? 20;
-      maxOpenPositions = s.maxOpenPositions ?? 5;
-    } catch {}
-
-    if (openPositions.size >= maxOpenPositions) {
-      enqueueSignal(
-        mint, pending.name, pending.symbol, pending.sizePct, pending.triggerAmountUsd,
-        currentPrice, pending.buyerWallet, pending.buyDetectedTimestamp, pending.tpTier,
-        pending.entryMode, pending.entryScore, pending.qualifyingWalletsCount, maxSlippageForQueue,
-        pending.qualifyingWallets,
-      );
-    } else {
-      await enterSniperPosition(
-        mint, pending.name, pending.symbol, pending.sizePct, pending.triggerAmountUsd,
-        currentPrice, pending.buyerWallet, pending.buyDetectedTimestamp, pending.tpTier,
-        pending.entryMode, pending.entryScore, pending.qualifyingWalletsCount, undefined, pending.qualifyingWallets,
-      );
-    }
-
-    pendingConsensusSignals.delete(mint);
-  }
+  pendingConsensusSignals.clear();
 }
 
 // Non-overlapping market refresh: waits for each run to finish before scheduling the next
@@ -3475,8 +3333,6 @@ export function editSniperPositionFields(id: string, updates: {
   if (!pos) return undefined;
   if (updates.entryPrice !== undefined && updates.entryPrice > 0) {
     pos.entryPrice = updates.entryPrice;
-    // Recalculate hard SL if TP1 not yet hit
-    if (!pos.tp1Hit) pos.currentSLPrice = updates.entryPrice * (1 - PRICE_SL_PCT);
   }
   if (updates.currentSLPrice !== undefined && updates.currentSLPrice > 0) {
     pos.currentSLPrice = updates.currentSLPrice;
