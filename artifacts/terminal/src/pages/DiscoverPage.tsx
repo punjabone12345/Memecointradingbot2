@@ -301,40 +301,48 @@ function TrackedCard({ tok, tick }: { tok: TrackedToken; tick: number }) {
         </div>
       </div>
 
-      {/* Threshold Status Bar */}
+      {/* 20 EMA Strategy Progress Bar & Status */}
       <div style={{ margin: '10px 0 8px', padding: '8px 12px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
           <div style={{ display: 'flex', gap: 12, fontSize: 10 }}>
-            <span style={{ fontWeight: 800, color: mcOk ? C.green : C.red }}>
-              {mcOk ? '✓' : '✗'} MC: ${fmtCompact(currentMc)} <span style={{ color: C.gray, fontWeight: 400 }}>(min $30K)</span>
+            <span style={{ fontWeight: 800, color: tok.ema20Mcap ? C.green : C.yellow }}>
+              📈 20 EMA: {tok.ema20Mcap ? `$${fmtCompact(tok.ema20Mcap)}` : 'Building (20m)'}
             </span>
-            <span style={{ fontWeight: 800, color: liqOk ? C.green : C.red }}>
-              {liqOk ? '✓' : '✗'} Liq: ${fmtCompact(currentLiq)} <span style={{ color: C.gray, fontWeight: 400 }}>(min $15K)</span>
+            <span style={{ fontWeight: 800, color: tok.pumpTargetHit ? C.green : '#00bfff' }}>
+              🎯 Target: {tok.pumpTargetMcap ? `$${fmtCompact(tok.pumpTargetMcap)} (+50%)` : 'Pending EMA'}
             </span>
           </div>
-          {tok.sustainAttempts ? (
-            <span style={{ fontSize: 8, color: C.gray }}>Attempts: {tok.sustainAttempts}×</span>
+          {tok.recent20MinLowMcap ? (
+            <span style={{ fontSize: 9, color: C.red, fontWeight: 700 }}>SL: ${fmtCompact(tok.recent20MinLowMcap)}</span>
           ) : null}
         </div>
 
-        {/* Sustain Progress Bar */}
-        {status === 'SUSTAINING' || tok.sustainStartedAt ? (
+        {/* 20 EMA Status Messages */}
+        {status === 'BUILDING_EMA' || (tok.candles && tok.candles.length < 20) ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 3 }}>
-              <span style={{ color: C.yellow, fontWeight: 800 }}>⏱ 10-Minute Sustain Timer Running</span>
-              <span style={{ color: '#e0e8ff', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{sustain.text}</span>
+              <span style={{ color: C.purple, fontWeight: 800 }}>📊 Building 20 EMA (1-min candles)</span>
+              <span style={{ color: '#e0e8ff', fontWeight: 800 }}>{tok.candles ? tok.candles.length : 0} / 20 candles</span>
             </div>
             <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-              <div style={{ width: `${sustain.pct}%`, height: '100%', borderRadius: 3, background: 'linear-gradient(90deg, #ffd700, #00ff88)', transition: 'width 1s linear' }} />
+              <div style={{ width: `${Math.min(100, ((tok.candles?.length || 0) / 20) * 100)}%`, height: '100%', borderRadius: 3, background: 'linear-gradient(90deg, #9b59ff, #00d4ff)', transition: 'width 1s linear' }} />
             </div>
           </div>
-        ) : status === 'SUSTAIN_RESET' ? (
-          <div style={{ fontSize: 9, color: C.orange, fontStyle: 'italic' }}>
-            🔄 Sustain timer reset: {tok.lastResetReason ?? 'Threshold dropped below minimum'}
+        ) : status === 'WAITING_FOR_PUMP' ? (
+          <div style={{ fontSize: 9, color: '#00bfff', fontWeight: 700 }}>
+            🚀 20 EMA plotted (${fmtCompact(tok.ema20Mcap ?? 0)}). Waiting for +50% pump to ${fmtCompact(tok.pumpTargetMcap ?? 0)}…
           </div>
-        ) : status === 'TRADE_ELIGIBLE' || status === 'SUSTAIN_COMPLETED' ? (
+        ) : status === 'PUMP_TARGET_HIT' || tok.pumpTargetHit ? (
+          <div style={{ fontSize: 9, color: '#a855f7', fontWeight: 800 }}>
+            🎯 +50% Pump Target Hit! Waiting for price retrace to 20 EMA (${fmtCompact(tok.ema20Mcap ?? 0)}) to buy 0.10 SOL…
+          </div>
+        ) : status === 'TRADED' ? (
           <div style={{ fontSize: 9, color: C.green, fontWeight: 800 }}>
-            ✅ Sustained $30K MC + $15K Liq for 10 continuous mins — Trade Eligible!
+            ⚡ Executed 0.10 SOL Buy Entry on 20 EMA Retrace! SL: ${fmtCompact(tok.recent20MinLowMcap ?? 0)} (20m Low)
+          </div>
+        ) : status === 'RUGCHECK_PENDING' ? (
+          <div style={{ fontSize: 9, color: C.orange, fontStyle: 'italic' }}>
+            ⏳ Initial RugCheck failed — scheduled retry in 5 minutes.
           </div>
         ) : status === 'REJECTED' ? (
           <div style={{ fontSize: 9, color: C.red }}>
@@ -342,11 +350,11 @@ function TrackedCard({ tok, tick }: { tok: TrackedToken; tick: number }) {
           </div>
         ) : status === 'EXPIRED' ? (
           <div style={{ fontSize: 9, color: C.gray }}>
-            ⏰ 2-hour tracking window exceeded without trade eligibility.
+            ⏰ 120-minute tracking window expired without retrace trade.
           </div>
         ) : (
           <div style={{ fontSize: 9, color: C.gray }}>
-            ⏳ Waiting for both $30K MC and $15K Liquidity to be reached simultaneously…
+            👀 Tracking token candles and monitoring 20 EMA plotting…
           </div>
         )}
       </div>

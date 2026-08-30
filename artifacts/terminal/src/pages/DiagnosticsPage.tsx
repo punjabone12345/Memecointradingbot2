@@ -336,23 +336,27 @@ function TokenDetail({ tok }: { tok: DiagToken }) {
 
       {/* Right Column */}
       <div>
-        <div style={{ ...C.label, marginBottom: 8 }}>Progression Status</div>
+        <div style={{ ...C.label, marginBottom: 8 }}>20 EMA Strategy Progression</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <FilterPass passed={tok.passed_rugcheck_at != null} />
-            <span>RugCheck Filter (Freeze Authority / Top Holders)</span>
+            <span>RugCheck Safety Filter (Freeze Authority / Insiders)</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FilterPass passed={currentMc >= 30000} />
-            <span>Market Cap Threshold ≥ $30,000 (Current: ${fmtNum(currentMc)})</span>
+            <FilterPass passed={tok.status !== 'REJECTED' || !tok.reject_reason?.includes('Fake Setup')} />
+            <span>Fake Setup Filter (No &gt;$200k spike in 5s)</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FilterPass passed={currentLiq >= 15000} />
-            <span>Liquidity Threshold ≥ $15,000 (Current: ${fmtNum(currentLiq)})</span>
+            <FilterPass passed={tok.status !== 'DISCOVERED' && tok.status !== 'RUGCHECK_PENDING' && tok.status !== 'BUILDING_EMA'} />
+            <span>20 EMA Initialized (20 1-minute candles formed)</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FilterPass passed={tok.status === 'SUSTAIN_COMPLETED' || tok.status === 'TRADE_ELIGIBLE' || tok.status === 'TRADED'} />
-            <span>10-Minute Continuous Sustain Gate</span>
+            <FilterPass passed={tok.status === 'PUMP_TARGET_HIT' || tok.status === 'TRADE_ELIGIBLE' || tok.status === 'TRADED'} />
+            <span>Pump Target Hit (+50% above 20 EMA start)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterPass passed={tok.status === 'TRADED'} />
+            <span>Executed 0.10 SOL Buy on 20 EMA Retrace</span>
           </div>
         </div>
 
