@@ -3,7 +3,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { logger } from '../lib/logger.js';
 import { broadcast, broadcastBalance } from '../websocket/server.js';
 import { getBalance, adjustBalance, getSettings } from './settings.service.js';
-import { notifySniperTrade, notifySniperSkip, notifySniperClose, notifySniperTP, notifyDiscovered, notifyThresholdsReached, notifySustainReset, notifySustainCompleted, notifyTrackingExpired } from '../lib/telegram.js';
+import { notifySniperTrade, notifySniperSkip, notifySniperClose, notifySniperTP, notifyDiscovered, notifyThresholdsReached, notifySustainReset, notifySustainCompleted, notifyTrackingExpired, formatPrice } from '../lib/telegram.js';
 import { checkRugcheck } from './rugcheck.service.js';
 import { query } from '../lib/db.js';
 import { withHeliusLimit, isHeliusCoolingDown } from '../lib/helius-limiter.js';
