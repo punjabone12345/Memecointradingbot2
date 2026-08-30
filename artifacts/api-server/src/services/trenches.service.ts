@@ -17,7 +17,7 @@
 
 import { logger } from '../lib/logger.js';
 import { query } from '../lib/db.js';
-import { withHeliusLimit, isRateLimitedError } from '../lib/helius-limiter.js';
+import { withHeliusLimit, isRateLimitedError, isHeliusCoolingDown } from '../lib/helius-limiter.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -89,6 +89,7 @@ async function fetchSigPage(
   for (const endpoint of RPC_ENDPOINTS) {
     try {
       const isHelius = endpoint.includes('helius');
+      if (isHelius && isHeliusCoolingDown()) continue;
       const call = () => rpcPost(endpoint, 'getSignaturesForAddress', [wallet, config]);
       const result = isHelius ? await withHeliusLimit(call, { priority: false }) : await call();
       if (Array.isArray(result)) return result;
@@ -152,6 +153,7 @@ async function getTransaction(sig: string): Promise<any | null> {
   for (const endpoint of RPC_ENDPOINTS) {
     try {
       const isHelius = endpoint.includes('helius');
+      if (isHelius && isHeliusCoolingDown()) continue;
       const call = () => rpcPost(endpoint, 'getTransaction', [sig, config]);
       const result = isHelius ? await withHeliusLimit(call, { priority: false }) : await call();
       if (result) return result;

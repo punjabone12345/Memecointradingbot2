@@ -15,12 +15,12 @@ import { logger } from './logger.js';
 //      across the whole process until the cooldown clears, with exponential
 //      growth on repeated 429s.
 
-const MAX_RPS = Math.max(1, Number(process.env.HELIUS_MAX_RPS ?? 5));
+const MAX_RPS = Math.max(1, Number(process.env.HELIUS_MAX_RPS ?? 10));
 const MIN_INTERVAL_MS = Math.ceil(1000 / MAX_RPS);
-const MAX_CONCURRENT = Math.max(1, Number(process.env.HELIUS_MAX_CONCURRENT ?? 3));
+const MAX_CONCURRENT = Math.max(1, Number(process.env.HELIUS_MAX_CONCURRENT ?? 8));
 
-const COOLDOWN_BASE_MS = 5_000;
-const COOLDOWN_MAX_MS = 120_000;
+const COOLDOWN_BASE_MS = 500;
+const COOLDOWN_MAX_MS = 3_000;
 
 let inFlight = 0;
 let lastRequestAt = 0;
@@ -84,8 +84,7 @@ async function acquireSlot(priority: boolean): Promise<void> {
   for (;;) {
     const now = Date.now();
     if (now < cooldownUntil) {
-      await sleep(Math.min(cooldownUntil - now, 5_000));
-      continue;
+      throw new Error(`Helius RPC cooling down for ${Math.round((cooldownUntil - now) / 1000)}s — HTTP 429`);
     }
     if (inFlight >= MAX_CONCURRENT) {
       await new Promise<void>((resolve) => {
