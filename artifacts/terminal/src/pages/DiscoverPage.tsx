@@ -70,7 +70,7 @@ function useSniperStatusFallback(skip: boolean) {
       } catch { /* ignore */ }
     }
     poll();
-    const id = setInterval(poll, 3_000);
+    const id = setInterval(poll, 1_000);
     return () => { cancelled = true; clearInterval(id); };
   }, [skip]);
   return status;
@@ -139,7 +139,7 @@ function useTrackerData(): { data: PumpfunTrackerData | null; loading: boolean }
       } catch { /* ignore */ }
     }
     poll();
-    const id = setInterval(poll, 2_000);
+    const id = setInterval(poll, 1_000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 

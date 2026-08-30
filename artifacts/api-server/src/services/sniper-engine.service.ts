@@ -2825,9 +2825,26 @@ function broadcastSniperStatus(): void {
 // Old approach: 128 tokens × 500ms stagger = 64s per cycle (completely broken).
 // New approach: ceil(128/30) = 5 batches × 300ms inter-batch pause = ~5s per cycle.
 
-const MARKET_REFRESH_MS       = 3_000;  // interval between refresh cycles (3s for near-live data)
+const MARKET_REFRESH_MS       = 1_000;  // 1-second interval for real-time live data
 const MARKET_BATCH_SIZE       = 30;     // DexScreener batch limit
-const MARKET_BATCH_PAUSE_MS   = 300;    // pause between batches to avoid rate-limits
+const MARKET_BATCH_PAUSE_MS   = 100;    // pause between batches
+
+async function fetchJupiterPrices(mints: string[]): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (!mints.length) return result;
+  try {
+    const url = `https://api.jup.ag/price/v2?ids=${mints.join(',')}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(3_000) });
+    if (!r.ok) return result;
+    const json = (await r.json()) as { data?: Record<string, { price?: string }> };
+    const data = json.data ?? {};
+    for (const mint of mints) {
+      const p = parseFloat(data[mint]?.price ?? '0');
+      if (p > 0) result.set(mint, p);
+    }
+  } catch {}
+  return result;
+}
 
 function applyDexData(tok: TrackedToken, d: DexMarketData): void {
   tok.lastMarketUpdate = Date.now();
@@ -2835,14 +2852,11 @@ function applyDexData(tok: TrackedToken, d: DexMarketData): void {
   if (!tok.poolAddress && d.pairAddress)         tok.poolAddress  = d.pairAddress;
   if (!tok.pairCreatedAt && d.pairCreatedAt > 0) tok.pairCreatedAt = d.pairCreatedAt;
   if (tok.name.endsWith('…') && d.name)          { tok.name = d.name; tok.symbol = d.symbol; }
-  // Update liquidity/mcap even when price=0 (DexScreener can return price=0 briefly
-  // while still having accurate liquidity; keeping stale low-liq causes false rejections).
   if (d.liquidity > 0)  tok.liquidity = d.liquidity;
-  if (d.mcap > 0)       tok.mcap      = d.mcap;
-  // Price-dependent fields only update when we have a valid price
+  if (d.mcap > 0 && (!tok.mcap || tok.mcap <= 0)) tok.mcap = d.mcap;
   if (d.price > 0) {
     tok.dexId           = d.dexId;
-    tok.price           = d.price;
+    if (!tok.price || tok.price <= 0) tok.price = d.price;
     tok.priceChange5m   = d.priceChange5m;
     tok.priceChange1h   = d.priceChange1h;
     tok.priceChange24h  = d.priceChange24h;
@@ -2860,40 +2874,51 @@ async function refreshTrackedTokensMarketData(): Promise<void> {
   const allMints = Array.from(trackedTokens.keys());
   if (!allMints.length) return;
 
-  // Chunk into batches of MARKET_BATCH_SIZE
+  const now = Date.now();
+  let updatedAny = false;
+
+  // 1. Fetch real-time sub-second spot prices from Jupiter Price API v2
+  const jupPrices = await fetchJupiterPrices(allMints);
+  for (const mint of allMints) {
+    const tok = trackedTokens.get(mint);
+    if (!tok) continue;
+    const jupPrice = jupPrices.get(mint);
+    if (jupPrice && jupPrice > 0) {
+      tok.price = jupPrice;
+      // Standard Pump.fun token supply = 1 Billion (1,000,000,000)
+      tok.mcap = Math.round(jupPrice * 1_000_000_000);
+      tok.lastMarketUpdate = now;
+      updatedAny = true;
+    }
+  }
+
+  // 2. Fetch DexScreener metadata in background
   const batches: string[][] = [];
   for (let i = 0; i < allMints.length; i += MARKET_BATCH_SIZE) {
     batches.push(allMints.slice(i, i + MARKET_BATCH_SIZE));
   }
 
-  let updated = false;
-  for (let bi = 0; bi < batches.length; bi++) {
-    const batch = batches[bi];
+  for (const batch of batches) {
     try {
       const dataMap = await fetchTokenPriceBatch(batch);
-      const now = Date.now();
       for (const mint of batch) {
         const tok = trackedTokens.get(mint);
         if (!tok) continue;
         const d = dataMap.get(mint);
         if (d) {
           applyDexData(tok, d);
-        } else {
-          // No data returned for this mint — still advance timestamp so UI doesn't freeze
-          tok.lastMarketUpdate = now;
+          if ((!tok.price || tok.price <= 0) && d.price > 0) {
+            tok.price = d.price;
+            tok.mcap = d.mcap;
+          }
         }
-        updated = true;
+        tok.lastMarketUpdate = now;
       }
-      // Broadcast after each batch so the UI gets partial updates immediately
-      // rather than waiting for all batches to complete
-      if (updated) broadcastSniperStatus();
-    } catch { /* non-fatal — keep stale data for this batch */ }
-
-    // Pause between batches (skip after the last one)
-    if (bi < batches.length - 1) {
-      await new Promise(r => setTimeout(r, MARKET_BATCH_PAUSE_MS));
-    }
+      updatedAny = true;
+    } catch {}
   }
+
+  if (updatedAny) broadcastSniperStatus();
 
   try {
     await evaluateAllTrackedTokensSustainState();
