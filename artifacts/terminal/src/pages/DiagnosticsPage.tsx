@@ -176,6 +176,178 @@ function FunnelPanel({ funnel }: { funnel: DiagFunnelStats | null }) {
   );
 }
 
+function fmtCompact(n: number | null | undefined): string {
+  if (!n || isNaN(n) || n <= 0) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
+
+// ── Live Tracked Tokens Analytics Panel ───────────────────────────────────────
+
+function TrackedTokensAnalyticsPanel({ sniperStatus }: { sniperStatus?: SniperStatus | null }) {
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TARGET_HIT' | 'TRADED' | 'REJECTED'>('ALL');
+
+  const tracked = sniperStatus?.trackedTokens ?? [];
+
+  const buildingCount = tracked.filter(t => t.status === 'BUILDING_EMA' || !t.ema20Mcap).length;
+  const waitingPumpCount = tracked.filter(t => t.status === 'WAITING_FOR_PUMP').length;
+  const targetHitCount = tracked.filter(t => t.status === 'PUMP_TARGET_HIT' || t.pumpTargetHit).length;
+  const tradedCount = tracked.filter(t => t.status === 'TRADED' || t.entryTriggered).length;
+  const rejectedCount = tracked.filter(t => t.status === 'REJECTED' || t.status === 'EXPIRED').length;
+
+  const filtered = tracked.filter(t => {
+    if (filter === 'ACTIVE') return t.status === 'BUILDING_EMA' || t.status === 'WAITING_FOR_PUMP' || t.status === 'RUGCHECK_PENDING';
+    if (filter === 'TARGET_HIT') return t.status === 'PUMP_TARGET_HIT' || t.pumpTargetHit;
+    if (filter === 'TRADED') return t.status === 'TRADED' || t.entryTriggered;
+    if (filter === 'REJECTED') return t.status === 'REJECTED' || t.status === 'EXPIRED';
+    return true;
+  });
+
+  return (
+    <div style={{ ...C.card, marginBottom: 10 }}>
+      <SectionHeader
+        title="📈 LIVE TRACKED TOKENS ANALYTICS"
+        sub="Real-time 20 EMA plotting, +50% pump targets, peak market caps, and retrace levels for all tracked tokens"
+      />
+      <div style={{ padding: '12px 14px' }}>
+        {/* Quick Filter Bar */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          {[
+            { id: 'ALL', label: `All (${tracked.length})` },
+            { id: 'ACTIVE', label: `Active (${buildingCount + waitingPumpCount})` },
+            { id: 'TARGET_HIT', label: `🎯 Target Hit (${targetHitCount})` },
+            { id: 'TRADED', label: `⚡ Traded (${tradedCount})` },
+            { id: 'REJECTED', label: `❌ Closed/Expired (${rejectedCount})` },
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id as any)}
+              style={{
+                padding: '4px 10px', borderRadius: 6, fontSize: 10, fontWeight: 800, border: 'none', cursor: 'pointer',
+                background: filter === f.id ? 'rgba(0,191,255,0.2)' : 'rgba(255,255,255,0.04)',
+                color: filter === f.id ? C.accent : C.gray,
+                outline: filter === f.id ? '1px solid rgba(0,191,255,0.4)' : 'none',
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Token Cards Grid */}
+        {filtered.length === 0 ? (
+          <div style={{ padding: 20, textAlign: 'center', color: C.gray, fontSize: 11 }}>
+            {tracked.length === 0 ? 'No tokens currently being tracked. Scanner is monitoring pump.fun migrations…' : 'No tokens match the selected filter.'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filtered.map(tok => {
+              const status = tok.status || 'DISCOVERED';
+              const candles = tok.candles || [];
+              const candleCount = candles.length;
+              const dexUrl = `https://dexscreener.com/solana/${tok.mint}`;
+
+              return (
+                <div
+                  key={tok.mint}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 900, color: C.text }}>{tok.symbol}</span>
+                        <span style={{ fontSize: 10, color: C.gray }}>{tok.name}</span>
+                        <a
+                          href={dexUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 9, fontWeight: 800, color: C.accent, textDecoration: 'none', background: 'rgba(0,191,255,0.1)', padding: '2px 6px', borderRadius: 4 }}
+                        >
+                          DEX ↗
+                        </a>
+                      </div>
+                      <div style={{ fontSize: 8, color: C.gray, marginTop: 2 }}>
+                        CA: <code style={{ color: '#a0b0d0' }}>{tok.mint}</code>
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 800,
+                          padding: '3px 8px',
+                          borderRadius: 5,
+                          background: status === 'TRADED' ? 'rgba(0,255,136,0.15)' : status === 'PUMP_TARGET_HIT' ? 'rgba(168,85,247,0.18)' : status === 'WAITING_FOR_PUMP' ? 'rgba(0,191,255,0.15)' : 'rgba(255,255,255,0.06)',
+                          color: status === 'TRADED' ? C.green : status === 'PUMP_TARGET_HIT' ? '#a855f7' : status === 'WAITING_FOR_PUMP' ? C.accent : C.yellow,
+                          border: '1px solid rgba(255,255,255,0.1)',
+                        }}
+                      >
+                        {status}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Metrics grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, background: 'rgba(0,0,0,0.2)', padding: '8px 10px', borderRadius: 8, marginTop: 6 }}>
+                    <div>
+                      <div style={{ fontSize: 8, color: C.gray, fontWeight: 700 }}>20 EMA LEVEL</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: tok.ema20Mcap ? C.green : C.yellow }}>
+                        {tok.ema20Mcap ? `$${fmtCompact(tok.ema20Mcap)}` : 'Building (20m)'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 8, color: C.gray, fontWeight: 700 }}>TARGET (+50%)</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: tok.pumpTargetHit ? C.green : C.accent }}>
+                        {tok.pumpTargetMcap ? `$${fmtCompact(tok.pumpTargetMcap)}` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 8, color: C.gray, fontWeight: 700 }}>PEAK MCAP</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: (tok.peakMcapSinceEma || 0) >= (tok.pumpTargetMcap || Infinity) ? C.green : C.text }}>
+                        {tok.peakMcapSinceEma ? `$${fmtCompact(tok.peakMcapSinceEma)}` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 8, color: C.gray, fontWeight: 700 }}>20M LOW (SL)</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: C.red }}>
+                        {tok.recent20MinLowMcap ? `$${fmtCompact(tok.recent20MinLowMcap)}` : '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Candle progress bar */}
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 2 }}>
+                      <span style={{ color: C.gray }}>1-min Candles: <strong style={{ color: C.text }}>{candleCount} / 20</strong></span>
+                      <span style={{ color: C.gray }}>Live Mcap: <strong style={{ color: C.text }}>${fmtCompact(tok.mcap)}</strong></span>
+                    </div>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${Math.min(100, (candleCount / 20) * 100)}%`,
+                          height: '100%',
+                          background: candleCount >= 20 ? 'linear-gradient(90deg, #00ff88, #00bfff)' : 'linear-gradient(90deg, #9b59ff, #00d4ff)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Daily Summary Panel ───────────────────────────────────────────────────────
 
 function SummaryPanel({ summary }: { summary: DiagDailySummary | null }) {
@@ -732,7 +904,7 @@ export default function DiagnosticsPage({ sniperStatus }: DiagnosticsPageProps) 
         ))}
       </div>
 
-      {tab === 'funnel'  && <><FunnelPanel funnel={funnel} /><SummaryPanel summary={summary} /></>}
+      {tab === 'funnel'  && <><FunnelPanel funnel={funnel} /><TrackedTokensAnalyticsPanel sniperStatus={sniperStatus} /><SummaryPanel summary={summary} /></>}
       {tab === 'tokens'  && <TokenTable since={since} />}
       {tab === 'top'     && <TopRejectedPanel since={since} />}
       {tab === 'errors'  && <ErrorLogPanel />}
