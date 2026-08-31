@@ -3127,14 +3127,6 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
     const currentMcap = tok.mcap ?? 0;
     if (!tok.launchMcap && currentMcap > 0) tok.launchMcap = currentMcap;
 
-    // Minimum $10K Market Cap Filter
-    if (currentMcap > 0 && currentMcap < 10000) {
-      if (tok.status !== 'REJECTED' && tok.status !== 'EXPIRED' && tok.status !== 'TRADED') {
-        tok.status = 'WAITING_FOR_PUMP';
-      }
-      continue;
-    }
-
     // 4. Fake Setup Spike Check (within first 10s of migration)
     const migrationAgeSec = (now - tok.migrationTime) / 1000;
     if (migrationAgeSec <= 10 && currentMcap > 0) {
@@ -3215,7 +3207,7 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
       }
     }
 
-    // 6. Retrace Buy Trigger: if pumpTargetHit is true, wait for price to retrace to 20 EMA
+    // 6. Retrace Buy Trigger: if pumpTargetHit is true, wait for price to retrace to 20 EMA (Min $10K MCAP required at entry)
     if (tok.pumpTargetHit && !tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
       const latestCandle = tok.candles && tok.candles.length > 0 ? tok.candles[tok.candles.length - 1] : null;
       const candleLowTouchedEma = latestCandle && (
@@ -3225,7 +3217,7 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
       const currentPriceTouchedEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20 * 1.01) ||
                                      (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap * 1.01);
 
-      const atOrBelowEma = candleLowTouchedEma || currentPriceTouchedEma;
+      const atOrBelowEma = (candleLowTouchedEma || currentPriceTouchedEma) && (currentMcap >= 10000);
 
       if (atOrBelowEma) {
         tok.entryTriggered = true;
