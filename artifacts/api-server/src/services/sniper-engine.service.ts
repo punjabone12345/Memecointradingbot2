@@ -3005,6 +3005,55 @@ function computeRecent20MinLow(candles: TokenCandle[], currentPrice: number, cur
   return { lowPrice: minLowPrice, lowMcap: minLowMcap };
 }
 
+function backfillTokenCandles(tok: TrackedToken): void {
+  if (!tok.migrationTime || tok.migrationTime <= 0) return;
+  if (!tok.candles) tok.candles = [];
+
+  const now = Date.now();
+  const startMinute = Math.floor(tok.migrationTime / 60000) * 60000;
+  const currentMinute = Math.floor(now / 60000) * 60000;
+
+  const firstMinuteToFill = Math.max(startMinute, currentMinute - 60 * 60000);
+  const endMinuteToFill = currentMinute;
+
+  if (firstMinuteToFill >= endMinuteToFill) return;
+
+  const currentPrice = tok.price ?? 0;
+  const currentMcap = tok.mcap ?? 0;
+  const launchMcap = tok.launchMcap ?? currentMcap;
+
+  const existingMinutes = new Set(tok.candles.map(c => c.minute));
+  const totalSpanMinutes = Math.max(1, (endMinuteToFill - firstMinuteToFill) / 60000);
+
+  let added = false;
+  for (let min = firstMinuteToFill; min <= endMinuteToFill; min += 60000) {
+    if (!existingMinutes.has(min)) {
+      const stepIndex = (min - firstMinuteToFill) / 60000;
+      const ratio = stepIndex / totalSpanMinutes;
+
+      const interpMcap = Math.round(launchMcap + (currentMcap - launchMcap) * ratio);
+      const interpPrice = currentPrice > 0 ? currentPrice : (interpMcap > 0 ? interpMcap / 1_000_000_000 : 0.00001);
+
+      tok.candles.push({
+        minute: min,
+        open: interpPrice,
+        high: interpPrice,
+        low: interpPrice,
+        close: interpPrice,
+        openMcap: interpMcap,
+        highMcap: interpMcap,
+        lowMcap: interpMcap,
+        closeMcap: interpMcap,
+      });
+      added = true;
+    }
+  }
+
+  if (added) {
+    tok.candles.sort((a, b) => a.minute - b.minute);
+  }
+}
+
 async function evaluateAllTrackedTokensSustainState(): Promise<void> {
   const s = await getSettings().catch(() => null);
   const positionSize = s?.positionSizeSol ?? 0.10;
@@ -3081,10 +3130,11 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
       }
     }
 
-    // 5. Update candles & calculate 20 EMA
+    // 5. Update candles, backfill missing history & calculate 20 EMA
     if (currentPrice > 0) {
       updateTokenCandle(tok, currentPrice, currentMcap);
     }
+    backfillTokenCandles(tok);
 
     const candleCount = tok.candles ? tok.candles.length : 0;
     tok.candlesCount = candleCount;
@@ -3119,10 +3169,10 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
         'Sniper engine: 20 EMA plotted — waiting for min +50% price pump',
       );
       broadcastSniperStatus();
-      continue;
     }
 
-    tok.peakMcapSinceEma = Math.max(tok.peakMcapSinceEma || 0, currentMcap);
+    const highestCandleMcap = Math.max(...(tok.candles || []).map(c => c.highMcap || 0), currentMcap);
+    tok.peakMcapSinceEma = Math.max(tok.peakMcapSinceEma || 0, highestCandleMcap);
 
     if (!tok.pumpTargetHit) {
       if (tok.peakMcapSinceEma >= (tok.pumpTargetMcap || 0)) {
@@ -3146,8 +3196,15 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
 
     // 6. Retrace Buy Trigger: if pumpTargetHit is true, wait for price to retrace to 20 EMA
     if (tok.pumpTargetHit && !tok.entryTriggered && !openPositions.has(tok.mint) && !everTradedMints.has(tok.mint)) {
-      const atOrBelowEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20 * 1.005) ||
-                           (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap * 1.005);
+      const latestCandle = tok.candles && tok.candles.length > 0 ? tok.candles[tok.candles.length - 1] : null;
+      const candleLowTouchedEma = latestCandle && (
+        (latestCandle.low > 0 && tok.ema20 && latestCandle.low <= tok.ema20 * 1.01) ||
+        (latestCandle.lowMcap > 0 && tok.ema20Mcap && latestCandle.lowMcap <= tok.ema20Mcap * 1.01)
+      );
+      const currentPriceTouchedEma = (currentPrice > 0 && tok.ema20 && currentPrice <= tok.ema20 * 1.01) ||
+                                     (currentMcap > 0 && tok.ema20Mcap && currentMcap <= tok.ema20Mcap * 1.01);
+
+      const atOrBelowEma = candleLowTouchedEma || currentPriceTouchedEma;
 
       if (atOrBelowEma) {
         tok.entryTriggered = true;

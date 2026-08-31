@@ -38,12 +38,12 @@ export async function checkRugcheck(mint: string, maxCreatorPct = 10): Promise<R
     const creatorPct = topHolders.filter((h) => h.insider).reduce((s, h) => s + h.pct, 0);
 
     const ok =
-      score <= 500 &&
+      score <= 2000 &&
       !hasCritical &&
       !hasFreezeAuth &&
       !hasMintAuth &&
-      topHolder < 20 &&
-      creatorPct < maxCreatorPct;
+      topHolder <= 45 &&
+      creatorPct <= 25;
 
     const result: RugcheckResult = { ok, topHolder, creatorPct };
     cache.set(mint, { result, ts: Date.now() });
