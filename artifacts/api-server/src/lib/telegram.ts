@@ -1,23 +1,39 @@
 import axios from 'axios';
 import { logger } from './logger.js';
-
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+import { getSettings } from '../services/settings.service.js';
 
 function toIST(date: Date): string {
   return date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
 }
 
-async function sendMessage(text: string): Promise<void> {
-  if (!BOT_TOKEN || !CHAT_ID) return;
+async function getTelegramCredentials(): Promise<{ token: string; chatId: string } | null> {
+  const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID || process.env.CHAT_ID;
+  if (token && chatId) return { token, chatId };
+
   try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: CHAT_ID,
+    const s = await getSettings();
+    const dbToken = (s as any).telegramBotToken || (s as any).botToken;
+    const dbChatId = (s as any).telegramChatId || (s as any).chatId;
+    if (dbToken && dbChatId) return { token: dbToken, chatId: dbChatId };
+  } catch {}
+  return null;
+}
+
+async function sendMessage(text: string): Promise<void> {
+  const creds = await getTelegramCredentials();
+  if (!creds) {
+    logger.debug('Telegram notification skipped — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set');
+    return;
+  }
+  try {
+    await axios.post(`https://api.telegram.org/bot${creds.token}/sendMessage`, {
+      chat_id: creds.chatId,
       text,
       parse_mode: 'HTML',
     });
-  } catch (err) {
-    logger.warn({ err }, 'Telegram send failed');
+  } catch (err: any) {
+    logger.warn({ err: err?.response?.data || err?.message }, 'Telegram send failed');
   }
 }
 

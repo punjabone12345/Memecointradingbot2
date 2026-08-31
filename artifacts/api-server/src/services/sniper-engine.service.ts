@@ -1168,6 +1168,13 @@ async function enterSniperPosition(
     let liquidityAtEntry = tok?.liquidity ?? 0;
     let mcapAtEntry = tok?.mcap ?? 0;
 
+    // Minimum $10K Market Cap filter
+    if (mcapAtEntry > 0 && mcapAtEntry < 10000) {
+      logger.info({ mint: mint.slice(0, 12), symbol, mcapAtEntry }, 'Sniper engine: entry skipped — Market Cap below $10,000 minimum threshold');
+      if (tok) tok.entryTriggered = false;
+      return;
+    }
+
     // ── Slippage guard ─────────────────────────────────────────────────────────
     let maxSlippage = 20;
     let configuredSizeSol = 0.10;
@@ -3005,52 +3012,58 @@ function computeRecent20MinLow(candles: TokenCandle[], currentPrice: number, cur
   return { lowPrice: minLowPrice, lowMcap: minLowMcap };
 }
 
-function backfillTokenCandles(tok: TrackedToken): void {
-  if (!tok.migrationTime || tok.migrationTime <= 0) return;
+async function syncRealOHLCVCandles(tok: TrackedToken): Promise<void> {
   if (!tok.candles) tok.candles = [];
-
   const now = Date.now();
-  const startMinute = Math.floor(tok.migrationTime / 60000) * 60000;
-  const currentMinute = Math.floor(now / 60000) * 60000;
 
-  const firstMinuteToFill = Math.max(startMinute, currentMinute - 60 * 60000);
-  const endMinuteToFill = currentMinute;
-
-  if (firstMinuteToFill >= endMinuteToFill) return;
-
-  const currentPrice = tok.price ?? 0;
-  const currentMcap = tok.mcap ?? 0;
-  const launchMcap = tok.launchMcap ?? currentMcap;
-
-  const existingMinutes = new Set(tok.candles.map(c => c.minute));
-  const totalSpanMinutes = Math.max(1, (endMinuteToFill - firstMinuteToFill) / 60000);
-
-  let added = false;
-  for (let min = firstMinuteToFill; min <= endMinuteToFill; min += 60000) {
-    if (!existingMinutes.has(min)) {
-      const stepIndex = (min - firstMinuteToFill) / 60000;
-      const ratio = stepIndex / totalSpanMinutes;
-
-      const interpMcap = Math.round(launchMcap + (currentMcap - launchMcap) * ratio);
-      const interpPrice = currentPrice > 0 ? currentPrice : (interpMcap > 0 ? interpMcap / 1_000_000_000 : 0.00001);
-
-      tok.candles.push({
-        minute: min,
-        open: interpPrice,
-        high: interpPrice,
-        low: interpPrice,
-        close: interpPrice,
-        openMcap: interpMcap,
-        highMcap: interpMcap,
-        lowMcap: interpMcap,
-        closeMcap: interpMcap,
+  if (tok.poolAddress) {
+    try {
+      const url = `https://api.geckoterminal.com/api/v2/networks/solana/pools/${tok.poolAddress}/ohlcv/minute?aggregate=1&limit=60`;
+      const resp = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(3_000),
       });
-      added = true;
-    }
-  }
+      if (resp.ok) {
+        const json = (await resp.json()) as { data?: { attributes?: { ohlcv_list?: number[][] } } };
+        const list = json.data?.attributes?.ohlcv_list ?? [];
+        if (Array.isArray(list) && list.length > 0) {
+          const supply = 1_000_000_000;
+          const realMap = new Map<number, TokenCandle>();
 
-  if (added) {
-    tok.candles.sort((a, b) => a.minute - b.minute);
+          for (const item of list) {
+            if (!Array.isArray(item) || item.length < 5) continue;
+            const tsSec = item[0];
+            const open = item[1];
+            const high = item[2];
+            const low = item[3];
+            const close = item[4];
+            const minute = tsSec * 1000;
+
+            realMap.set(minute, {
+              minute,
+              open,
+              high,
+              low,
+              close,
+              openMcap: Math.round(open * supply),
+              highMcap: Math.round(high * supply),
+              lowMcap: Math.round(low * supply),
+              closeMcap: Math.round(close * supply),
+            });
+          }
+
+          for (const c of tok.candles) {
+            if (!realMap.has(c.minute)) {
+              realMap.set(c.minute, c);
+            }
+          }
+
+          const merged = Array.from(realMap.values()).sort((a, b) => a.minute - b.minute);
+          tok.candles = merged.filter(c => c.minute >= now - 60 * 60000);
+          return;
+        }
+      }
+    } catch {}
   }
 }
 
@@ -3114,6 +3127,14 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
     const currentMcap = tok.mcap ?? 0;
     if (!tok.launchMcap && currentMcap > 0) tok.launchMcap = currentMcap;
 
+    // Minimum $10K Market Cap Filter
+    if (currentMcap > 0 && currentMcap < 10000) {
+      if (tok.status !== 'REJECTED' && tok.status !== 'EXPIRED' && tok.status !== 'TRADED') {
+        tok.status = 'WAITING_FOR_PUMP';
+      }
+      continue;
+    }
+
     // 4. Fake Setup Spike Check (within first 10s of migration)
     const migrationAgeSec = (now - tok.migrationTime) / 1000;
     if (migrationAgeSec <= 10 && currentMcap > 0) {
@@ -3130,11 +3151,11 @@ async function evaluateAllTrackedTokensSustainState(): Promise<void> {
       }
     }
 
-    // 5. Update candles, backfill missing history & calculate 20 EMA
+    // 5. Update candles & sync real DEX OHLCV 1m candles for 100% DexScreener alignment
     if (currentPrice > 0) {
       updateTokenCandle(tok, currentPrice, currentMcap);
     }
-    backfillTokenCandles(tok);
+    await syncRealOHLCVCandles(tok);
 
     const candleCount = tok.candles ? tok.candles.length : 0;
     tok.candlesCount = candleCount;
