@@ -4,15 +4,32 @@ import { AltcoinAsset, AltcoinSignal, SignalStatus, SetupType, TradeThesis, Altc
 import { processPaperTradingEngine } from './altcoin-paper.service.js';
 import { calculateEMA, findSwingPivots, identifyFVGs, Kline } from './smc.js';
 
+const klinesCache = new Map<string, { data: Kline[], timestamp: number }>();
+
 async function fetchBinanceKlines(symbol: string): Promise<Kline[]> {
+  const now = Date.now();
+  const cached = klinesCache.get(symbol);
+  
+  // Cache 1H klines for 5 minutes (they don't change fast enough to need 30s polling)
+  if (cached && now - cached.timestamp < 300_000) {
+    return cached.data;
+  }
+
   try {
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`;
-    const response = await axios.get(url, { timeout: 4000 });
-    return response.data.map((d: any[]) => ({
+    // Increased timeout to prevent Render from dropping concurrent requests
+    const response = await axios.get(url, { timeout: 8000 }); 
+    const data = response.data.map((d: any[]) => ({
       timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
     }));
-  } catch (err) {
-    return [];
+    
+    if (data.length > 0) {
+      klinesCache.set(symbol, { data, timestamp: now });
+    }
+    return data;
+  } catch (err: any) {
+    logger.warn({ symbol, err: err?.message }, 'Failed to fetch Klines, falling back to cache if available');
+    return cached ? cached.data : [];
   }
 }
 
@@ -143,7 +160,6 @@ export async function fetchAltcoinMarketSignals(): Promise<AltcoinSignal[]> {
   if (tickerMap.size > 0) {
     const computedSignals: AltcoinSignal[] = [];
 
-      const signalPromises = [];
       for (let i = 0; i < SEED_ALTCOINS.length; i++) {
         const seed = SEED_ALTCOINS[i];
         let ticker = tickerMap.get(seed.binanceSymbol);
@@ -155,14 +171,13 @@ export async function fetchAltcoinMarketSignals(): Promise<AltcoinSignal[]> {
           const volume24h = parseFloat(ticker.quoteVolume) || 10_000_000;
           const high24h = parseFloat(ticker.highPrice) || lastPrice * 1.05;
           const low24h = parseFloat(ticker.lowPrice) || lastPrice * 0.95;
-          signalPromises.push(computeRealSignal(seed, lastPrice, change24h, volume24h, high24h, low24h, i + 1));
+          const result = await computeRealSignal(seed, lastPrice, change24h, volume24h, high24h, low24h, i + 1);
+          computedSignals.push(result);
         } else if (seed.symbol === 'HYPE') {
-          signalPromises.push(computeRealSignal(seed, 24.85, 3.45, 85_000_000, 26.10, 23.40, i + 1));
+          const result = await computeRealSignal(seed, 24.85, 3.45, 85_000_000, 26.10, 23.40, i + 1);
+          computedSignals.push(result);
         }
       }
-
-      const results = await Promise.all(signalPromises);
-      computedSignals.push(...results);
 
       if (computedSignals.length > 0) {
         // ── Quality over Quantity Gate ──
