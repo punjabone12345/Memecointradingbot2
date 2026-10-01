@@ -10,27 +10,32 @@ async function fetchBinanceKlines(symbol: string): Promise<Kline[]> {
   const now = Date.now();
   const cached = klinesCache.get(symbol);
   
-  // Cache 1H klines for 5 minutes (they don't change fast enough to need 30s polling)
   if (cached && now - cached.timestamp < 300_000) {
     return cached.data;
   }
 
-  try {
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`;
-    // Increased timeout to prevent Render from dropping concurrent requests
-    const response = await axios.get(url, { timeout: 8000 }); 
-    const data = response.data.map((d: any[]) => ({
-      timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
-    }));
-    
-    if (data.length > 0) {
-      klinesCache.set(symbol, { data, timestamp: now });
+  const endpoints = [
+    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`,
+    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const response = await axios.get(url, { timeout: 6000 }); 
+      const data = response.data.map((d: any[]) => ({
+        timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
+      }));
+      
+      if (data.length > 0) {
+        klinesCache.set(symbol, { data, timestamp: now });
+        return data;
+      }
+    } catch (err: any) {
+      logger.warn({ symbol, url, err: err?.message }, 'Failed to fetch Klines from mirror');
     }
-    return data;
-  } catch (err: any) {
-    logger.warn({ symbol, err: err?.message }, 'Failed to fetch Klines, falling back to cache if available');
-    return cached ? cached.data : [];
   }
+
+  return cached ? cached.data : [];
 }
 
 interface BinanceTicker {
