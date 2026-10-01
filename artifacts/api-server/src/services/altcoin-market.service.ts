@@ -6,17 +6,23 @@ import { calculateEMA, findSwingPivots, identifyFVGs, Kline } from './smc.js';
 
 const klinesCache = new Map<string, { data: Kline[], timestamp: number }>();
 
-async function fetchBinanceKlines(symbol: string): Promise<Kline[]> {
+async function fetchBinanceKlines(symbol: string, interval: string = '1h', limit: number = 200): Promise<Kline[]> {
   const now = Date.now();
-  const cached = klinesCache.get(symbol);
+  const cacheKey = `${symbol}_${interval}`;
+  const cached = klinesCache.get(cacheKey);
   
-  if (cached && now - cached.timestamp < 300_000) {
+  // Cache TTL based on interval
+  let ttl = 300_000; // 5 mins default (for 15m)
+  if (interval === '1h') ttl = 900_000; // 15 mins for 1H
+  if (interval === '4h') ttl = 3600_000; // 1 hr for 4H
+
+  if (cached && now - cached.timestamp < ttl) {
     return cached.data;
   }
 
   const endpoints = [
-    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`,
-    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`
+    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
   ];
 
   for (const url of endpoints) {
@@ -27,11 +33,11 @@ async function fetchBinanceKlines(symbol: string): Promise<Kline[]> {
       }));
       
       if (data.length > 0) {
-        klinesCache.set(symbol, { data, timestamp: now });
+        klinesCache.set(cacheKey, { data, timestamp: now });
         return data;
       }
     } catch (err: any) {
-      logger.warn({ symbol, url, err: err?.message }, 'Failed to fetch Klines from mirror');
+      logger.warn({ symbol, interval, err: err?.message }, 'Failed to fetch Klines from mirror');
     }
   }
 
@@ -278,145 +284,164 @@ async function computeRealSignal(
   const marketCap = Math.round(volume24h * 12);
   let setupType: SetupType = 'NONE';
   let status: SignalStatus = 'WATCHING';
-  let reason = 'Waiting for high-probability SMC setup.';
-  let missingCondition: string | null = 'Scanning 1H market structure...';
+  let reason = 'Waiting for high-probability MTF SMC setup.';
+  let missingCondition: string | null = 'Scanning 4H/1H/15m market structure...';
   let side: 'LONG' | 'SHORT' = 'LONG';
   let stopLoss = parseFloat((price * 0.95).toFixed(price < 1 ? 4 : 2));
   let takeProfit = parseFloat((price * 1.10).toFixed(price < 1 ? 4 : 2));
   let aiScore = 50;
 
-  // SMC Filter: Ensure enough liquidity to avoid massive slippage/wicks
-  const isLiquid = volume24h >= 15_000_000; 
-  
+  const isLiquid = volume24h >= 15_000_000;
   let structureDetails = '';
   let trendStr = 'BULLISH';
   let mtfTrendBull = true;
 
   if (!isLiquid) {
-    reason = `Volume ($${(volume24h/1000000).toFixed(1)}M) too low for institutional SMC.`;
+    reason = `Volume ($${(volume24h/1000000).toFixed(1)}M) too low for institutional MTF.`;
     missingCondition = 'Needs > $15M 24h volume to qualify.';
     aiScore = 40;
   } else {
-    // Fetch 1H Klines for SMC Logic
-    const klines = await fetchBinanceKlines(seed.binanceSymbol);
-    if (klines.length >= 50) {
-      const ema50 = calculateEMA(klines, 50);
-      const currentEma = ema50[ema50.length - 1];
-      const pivots = findSwingPivots(klines, 4, 4);
-      const fvgs = identifyFVGs(klines);
+    // 1. Fetch 3 Timeframes
+    const [klines4h, klines1h, klines15m] = await Promise.all([
+      fetchBinanceKlines(seed.binanceSymbol, '4h', 100),
+      fetchBinanceKlines(seed.binanceSymbol, '1h', 100),
+      fetchBinanceKlines(seed.binanceSymbol, '15m', 100)
+    ]);
 
-      const isUptrend = price > currentEma;
-      mtfTrendBull = isUptrend;
+    if (klines4h.length >= 50 && klines1h.length >= 50 && klines15m.length >= 50) {
+      // 2. Macro Bias (4H)
+      const ema200_4h = calculateEMA(klines4h, 50); // Using 50 EMA on 4H as trend filter
+      const currentEma4h = ema200_4h[ema200_4h.length - 1];
+      const isUptrend4H = price > currentEma4h;
+      mtfTrendBull = isUptrend4H;
 
-      if (isUptrend) {
+      // 3. Intermediate POI (1H) & Execution (15m)
+      const pivots1h = findSwingPivots(klines1h, 4, 4);
+      const fvgs1h = identifyFVGs(klines1h);
+      
+      const pivots15m = findSwingPivots(klines15m, 4, 4);
+
+      if (isUptrend4H) {
         side = 'LONG';
         trendStr = 'BULLISH';
+
+        // Find 1H POI
+        const lastHigh1h = pivots1h.slice().reverse().find(p => p.type === 'HIGH');
+        const lastLow1h = lastHigh1h ? pivots1h.slice().reverse().find(p => p.type === 'LOW' && p.index < lastHigh1h.index) : null;
         
-        // Find valid Bullish Leg: A recent Low followed by a recent High
-        const lastHigh = pivots.slice().reverse().find(p => p.type === 'HIGH');
-        const lastLow = lastHigh ? pivots.slice().reverse().find(p => p.type === 'LOW' && p.index < lastHigh.index) : null;
-        
-        if (lastHigh && lastLow) {
-          const recentHigh = lastHigh.price;
-          const recentLow = lastLow.price;
-          const swingRange = recentHigh - recentLow;
+        if (lastHigh1h && lastLow1h) {
+          const recentHigh1h = lastHigh1h.price;
+          const recentLow1h = lastLow1h.price;
+          const swingRange1h = recentHigh1h - recentLow1h;
           
-          if (swingRange > 0) {
-            const fibLevel = (recentHigh - price) / swingRange;
-            const isDiscount = fibLevel >= 0.5;
-            const isOTE = fibLevel >= 0.618 && fibLevel <= 0.786;
+          if (swingRange1h > 0) {
+            const oteTop1h = recentHigh1h - (swingRange1h * 0.618);
+            const oteBottom1h = recentHigh1h - (swingRange1h * 0.786);
             
-            const oteTop = recentHigh - (swingRange * 0.618);
-            const oteBottom = recentHigh - (swingRange * 0.786);
+            const validFvgs1h = fvgs1h.filter(f => f.type === 'BULLISH' && f.index >= lastLow1h.index && f.index <= lastHigh1h.index);
+            const oteFvg1h = validFvgs1h.find(f => f.top >= oteBottom1h && f.bottom <= oteTop1h);
             
-            // FVG must overlap with OTE zone
-            const validFvgs = fvgs.filter(f => f.type === 'BULLISH' && f.index >= lastLow.index && f.index <= lastHigh.index);
-            const oteFvg = validFvgs.find(f => f.top >= oteBottom && f.bottom <= oteTop);
+            const inside1hFvg = oteFvg1h ? (price <= oteFvg1h.top * 1.01 && price >= oteFvg1h.bottom * 0.99) : false;
             
-            const tappingFvg = oteFvg ? (price <= oteFvg.top && price >= oteFvg.bottom * 0.99) : false;
-
-            structureDetails = `1H Swing: $${recentLow.toFixed(price<1?4:2)} - $${recentHigh.toFixed(price<1?4:2)}. OTE Zone: $${oteBottom.toFixed(price<1?4:2)} - $${oteTop.toFixed(price<1?4:2)}.`;
+            structureDetails = `4H Trend: Bullish. 1H FVG: ${oteFvg1h ? `$${oteFvg1h.bottom.toFixed(price<1?4:2)} - $${oteFvg1h.top.toFixed(price<1?4:2)}` : 'None'}.`;
             
-            if (oteFvg) {
-              missingCondition = `Waiting for pullback into OTE + FVG ($${oteFvg.bottom.toFixed(price<1?4:2)} - $${oteFvg.top.toFixed(price<1?4:2)})`;
+            if (!oteFvg1h) {
+               missingCondition = 'Waiting for 1H Bullish FVG to form in OTE zone.';
+               aiScore = 55;
+            } else if (!inside1hFvg) {
+               missingCondition = 'Waiting for price to pull back into 1H FVG POI.';
+               aiScore = 65;
             } else {
-              missingCondition = `Waiting for price to reach OTE zone. No FVG in OTE.`;
-            }
+               // 4. We are inside the 1H POI! Now check 15M execution.
+               missingCondition = 'In 1H POI. Scanning 15m for entry setup (Order Block or OTE tap).';
+               aiScore = 80;
 
-            if (isOTE && tappingFvg) {
-              aiScore = 95;
-              status = 'ENTRY_READY';
-              setupType = 'PULLBACK';
-              reason = `SMC LONG: Price tapped bullish FVG inside Optimal Trade Entry (Fib ${fibLevel.toFixed(2)})!`;
-              missingCondition = null;
-              stopLoss = parseFloat((recentLow * 0.99).toFixed(price < 1 ? 4 : 2));
-              takeProfit = parseFloat(recentHigh.toFixed(price < 1 ? 4 : 2));
-            } else if (isDiscount) {
-              aiScore = 75 + (fibLevel * 10);
-              status = 'NEAR_ENTRY';
-              reason = `1H Pullback in Discount Zone (Fib ${fibLevel.toFixed(2)}). ${structureDetails}`;
-            } else {
-              aiScore = 50 + (fibLevel * 20);
-              reason = `1H Trend Bullish. Price in Premium. ${structureDetails}`;
+               const lastHigh15m = pivots15m.slice().reverse().find(p => p.type === 'HIGH');
+               const lastLow15m = lastHigh15m ? pivots15m.slice().reverse().find(p => p.type === 'LOW' && p.index < lastHigh15m.index) : null;
+               
+               if (lastHigh15m && lastLow15m) {
+                 const swingRange15m = lastHigh15m.price - lastLow15m.price;
+                 const oteTop15m = lastHigh15m.price - (swingRange15m * 0.618);
+                 const oteBottom15m = lastHigh15m.price - (swingRange15m * 0.786);
+                 
+                 const fibLevel15m = (lastHigh15m.price - price) / swingRange15m;
+                 const in15mOTE = fibLevel15m >= 0.618 && fibLevel15m <= 0.786;
+                 
+                 if (in15mOTE || price <= oteTop15m) {
+                    aiScore = 95;
+                    status = 'ENTRY_READY';
+                    setupType = 'PULLBACK';
+                    reason = `MTF LONG: 4H Trend Bullish + Tapped 1H FVG + 15m OTE Entry!`;
+                    missingCondition = null;
+                    stopLoss = parseFloat((lastLow15m.price * 0.99).toFixed(price < 1 ? 4 : 2));
+                    takeProfit = parseFloat(recentHigh1h.toFixed(price < 1 ? 4 : 2));
+                 }
+               }
             }
           }
         }
       } else {
         side = 'SHORT';
         trendStr = 'BEARISH';
+
+        // Find 1H POI
+        const lastLow1h = pivots1h.slice().reverse().find(p => p.type === 'LOW');
+        const lastHigh1h = lastLow1h ? pivots1h.slice().reverse().find(p => p.type === 'HIGH' && p.index < lastLow1h.index) : null;
         
-        // Find valid Bearish Leg: A recent High followed by a recent Low
-        const lastLow = pivots.slice().reverse().find(p => p.type === 'LOW');
-        const lastHigh = lastLow ? pivots.slice().reverse().find(p => p.type === 'HIGH' && p.index < lastLow.index) : null;
-        
-        if (lastHigh && lastLow) {
-          const recentHigh = lastHigh.price;
-          const recentLow = lastLow.price;
-          const swingRange = recentHigh - recentLow;
+        if (lastHigh1h && lastLow1h) {
+          const recentHigh1h = lastHigh1h.price;
+          const recentLow1h = lastLow1h.price;
+          const swingRange1h = recentHigh1h - recentLow1h;
           
-          if (swingRange > 0) {
-            const fibLevel = (price - recentLow) / swingRange;
-            const isPremium = fibLevel >= 0.5; 
-            const isOTE = fibLevel >= 0.618 && fibLevel <= 0.786;
+          if (swingRange1h > 0) {
+            const oteBottom1h = recentLow1h + (swingRange1h * 0.618);
+            const oteTop1h = recentLow1h + (swingRange1h * 0.786);
             
-            const oteBottom = recentLow + (swingRange * 0.618);
-            const oteTop = recentLow + (swingRange * 0.786);
+            const validFvgs1h = fvgs1h.filter(f => f.type === 'BEARISH' && f.index >= lastHigh1h.index && f.index <= lastLow1h.index);
+            const oteFvg1h = validFvgs1h.find(f => f.bottom <= oteTop1h && f.top >= oteBottom1h);
             
-            // FVG must overlap with OTE zone
-            const validFvgs = fvgs.filter(f => f.type === 'BEARISH' && f.index >= lastHigh.index && f.index <= lastLow.index);
-            const oteFvg = validFvgs.find(f => f.bottom <= oteTop && f.top >= oteBottom);
+            const inside1hFvg = oteFvg1h ? (price >= oteFvg1h.bottom * 0.99 && price <= oteFvg1h.top * 1.01) : false;
             
-            const tappingFvg = oteFvg ? (price >= oteFvg.bottom && price <= oteFvg.top * 1.01) : false;
-
-            structureDetails = `1H Swing: $${recentHigh.toFixed(price<1?4:2)} - $${recentLow.toFixed(price<1?4:2)}. OTE Zone: $${oteBottom.toFixed(price<1?4:2)} - $${oteTop.toFixed(price<1?4:2)}.`;
+            structureDetails = `4H Trend: Bearish. 1H FVG: ${oteFvg1h ? `$${oteFvg1h.bottom.toFixed(price<1?4:2)} - $${oteFvg1h.top.toFixed(price<1?4:2)}` : 'None'}.`;
             
-            if (oteFvg) {
-              missingCondition = `Waiting for relief rally into OTE + FVG ($${oteFvg.bottom.toFixed(price<1?4:2)} - $${oteFvg.top.toFixed(price<1?4:2)})`;
+            if (!oteFvg1h) {
+               missingCondition = 'Waiting for 1H Bearish FVG to form in OTE zone.';
+               aiScore = 55;
+            } else if (!inside1hFvg) {
+               missingCondition = 'Waiting for relief rally into 1H FVG POI.';
+               aiScore = 65;
             } else {
-              missingCondition = `Waiting for price to rally into OTE zone. No FVG in OTE.`;
-            }
+               // 4. We are inside the 1H POI! Now check 15M execution.
+               missingCondition = 'In 1H POI. Scanning 15m for entry setup (Order Block or OTE tap).';
+               aiScore = 80;
 
-            if (isOTE && tappingFvg) {
-              aiScore = 95;
-              status = 'ENTRY_READY';
-              setupType = 'REVERSAL';
-              reason = `SMC SHORT: Price tapped bearish FVG inside Optimal Trade Entry (Fib ${fibLevel.toFixed(2)})!`;
-              missingCondition = null;
-              stopLoss = parseFloat((recentHigh * 1.01).toFixed(price < 1 ? 4 : 2));
-              takeProfit = parseFloat(recentLow.toFixed(price < 1 ? 4 : 2));
-            } else if (isPremium) {
-              aiScore = 75 + (fibLevel * 10);
-              status = 'NEAR_ENTRY';
-              reason = `1H Relief in Premium Zone (Fib ${fibLevel.toFixed(2)}). ${structureDetails}`;
-            } else {
-              aiScore = 50 + (fibLevel * 20);
-              reason = `1H Trend Bearish. Price in Discount. ${structureDetails}`;
+               const lastLow15m = pivots15m.slice().reverse().find(p => p.type === 'LOW');
+               const lastHigh15m = lastLow15m ? pivots15m.slice().reverse().find(p => p.type === 'HIGH' && p.index < lastLow15m.index) : null;
+               
+               if (lastHigh15m && lastLow15m) {
+                 const swingRange15m = lastHigh15m.price - lastLow15m.price;
+                 const oteBottom15m = lastLow15m.price + (swingRange15m * 0.618);
+                 const oteTop15m = lastLow15m.price + (swingRange15m * 0.786);
+                 
+                 const fibLevel15m = (price - lastLow15m.price) / swingRange15m;
+                 const in15mOTE = fibLevel15m >= 0.618 && fibLevel15m <= 0.786;
+                 
+                 if (in15mOTE || price >= oteBottom15m) {
+                    aiScore = 95;
+                    status = 'ENTRY_READY';
+                    setupType = 'REVERSAL';
+                    reason = `MTF SHORT: 4H Trend Bearish + Tapped 1H FVG + 15m OTE Entry!`;
+                    missingCondition = null;
+                    stopLoss = parseFloat((lastHigh15m.price * 1.01).toFixed(price < 1 ? 4 : 2));
+                    takeProfit = parseFloat(recentLow1h.toFixed(price < 1 ? 4 : 2));
+                 }
+               }
             }
           }
         }
       }
     } else {
-      reason = 'Failed to fetch sufficient 1H Klines for SMC analysis.';
+      reason = 'Failed to fetch MTF Klines for SMC analysis.';
       aiScore = 45;
     }
   }
