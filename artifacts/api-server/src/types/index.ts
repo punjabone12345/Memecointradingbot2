@@ -159,6 +159,7 @@ export interface PaperPosition {
   entryPrice: number;
   currentPrice: number;
   stopLoss: number;
+  originalStopLoss: number;       // Never changes — original SL at entry
   takeProfit: number;
   positionSizeUsd: number;
   quantity: number;
@@ -167,6 +168,8 @@ export interface PaperPosition {
   unrealizedPnlUsd: number;
   unrealizedPnlPct: number;
   rMultiple: number;
+  highWaterMark: number;          // Best price seen since entry (for trailing)
+  isTrailingActive: boolean;      // True once trailing stop has engaged
   aiScoreAtEntry: number;
   setupType: SetupType;
   entryTime: number;

@@ -189,15 +189,27 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
   // 1. Update Open Positions with latest prices and check SL / TP exits (Both LONG & SHORT)
   for (const pos of [...openPositions]) {
     const signal = signals.find(s => s.assetId === pos.assetId || s.symbol === pos.symbol);
-    if (!signal) continue;
+    if (!signal || !signal.price || signal.price <= 0) continue;
 
     pos.currentPrice = signal.price;
     const isLong = pos.side === 'LONG';
     const priceDiff = isLong ? pos.currentPrice - pos.entryPrice : pos.entryPrice - pos.currentPrice;
+    
+    // Safety guard against div-by-zero
+    const safeEntryPrice = pos.entryPrice > 0 ? pos.entryPrice : 1;
     pos.unrealizedPnlUsd = parseFloat((priceDiff * pos.quantity).toFixed(2));
-    pos.unrealizedPnlPct = parseFloat(((priceDiff / pos.entryPrice) * 100).toFixed(2));
-    const riskPriceDist = Math.abs(pos.entryPrice - pos.stopLoss);
+    pos.unrealizedPnlPct = parseFloat(((priceDiff / safeEntryPrice) * 100).toFixed(2));
+    
+    // Use original stop loss for R-Multiple distance calculation, otherwise it skews when trailing
+    const riskPriceDist = Math.abs(pos.entryPrice - (pos.originalStopLoss || pos.stopLoss));
     pos.rMultiple = riskPriceDist > 0 ? parseFloat((priceDiff / riskPriceDist).toFixed(2)) : 0;
+
+    // Track High Water Mark (for trailing stop)
+    if (isLong) {
+      pos.highWaterMark = Math.max(pos.highWaterMark || pos.entryPrice, pos.currentPrice);
+    } else {
+      pos.highWaterMark = pos.highWaterMark ? Math.min(pos.highWaterMark, pos.currentPrice) : pos.currentPrice;
+    }
 
     // Check Take Profit Exit
     if ((isLong && pos.currentPrice >= pos.takeProfit) || (!isLong && pos.currentPrice <= pos.takeProfit)) {
@@ -206,47 +218,100 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
     // Check Stop Loss Exit
     else if ((isLong && pos.currentPrice <= pos.stopLoss) || (!isLong && pos.currentPrice >= pos.stopLoss)) {
       await closePositionInternal(pos.id, pos.stopLoss, 'SL_HIT');
+    }
+    // Early Exit: Market Regime Change (AI Score drops below 45, indicating thesis invalidated)
+    else if (signal.aiScore < 45 && pos.rMultiple < 1.0) {
+      logger.info({ symbol: pos.symbol, aiScore: signal.aiScore, side: pos.side }, 'Early Exit: Market regime changed against position thesis');
+      await closePositionInternal(pos.id, pos.currentPrice, 'INVALIDATED');
     } else {
-      // Dynamic Break-Even Ratchet:
-      // If position reaches +1.0R in profit, ratchet Stop Loss to Break-Even (entry price)
-      if (pos.rMultiple >= 1.0) {
+      let stopMoved = false;
+
+      // 1. Break-Even Ratchet (+1.0R)
+      if (pos.rMultiple >= 1.0 && !pos.isTrailingActive) {
         if (isLong && pos.stopLoss < pos.entryPrice) {
           pos.stopLoss = pos.entryPrice;
-          logger.info({ symbol: pos.symbol, entryPrice: pos.entryPrice }, 'Ratchet: Stop Loss moved to Break-Even (+1.0R achieved)');
+          stopMoved = true;
         } else if (!isLong && pos.stopLoss > pos.entryPrice) {
           pos.stopLoss = pos.entryPrice;
-          logger.info({ symbol: pos.symbol, entryPrice: pos.entryPrice }, 'Ratchet: Stop Loss moved to Break-Even (+1.0R achieved)');
+          stopMoved = true;
         }
+      }
+
+      // 2. True Trailing Stop (+2.0R or higher) -> Lock in profits below high water mark
+      if (pos.rMultiple >= 2.0) {
+        pos.isTrailingActive = true;
+        const trailDist = riskPriceDist * 0.75; // Trail by 0.75R from peak
+        
+        if (isLong) {
+          const newStop = pos.highWaterMark - trailDist;
+          if (newStop > pos.stopLoss) {
+            pos.stopLoss = parseFloat(newStop.toFixed(pos.currentPrice < 1 ? 4 : 2));
+            stopMoved = true;
+          }
+        } else {
+          const newStop = pos.highWaterMark + trailDist;
+          if (newStop < pos.stopLoss) {
+            pos.stopLoss = parseFloat(newStop.toFixed(pos.currentPrice < 1 ? 4 : 2));
+            stopMoved = true;
+          }
+        }
+      }
+
+      if (stopMoved) {
+        logger.info({ symbol: pos.symbol, newStop: pos.stopLoss, r: pos.rMultiple, isTrailing: pos.isTrailingActive }, 'Stop Loss trailed');
       }
 
       // Sync live unrealized metrics & updated ratcheted stop to DB
       query(`
         UPDATE paper_positions
-        SET current_price = $1, unrealized_pnl_usd = $2, unrealized_pnl_pct = $3, r_multiple = $4, stop_loss = $5, updated_at = NOW()
-        WHERE id = $6
-      `, [pos.currentPrice, pos.unrealizedPnlUsd, pos.unrealizedPnlPct, pos.rMultiple, pos.stopLoss, pos.id]).catch(() => {});
+        SET current_price = $1, unrealized_pnl_usd = $2, unrealized_pnl_pct = $3, r_multiple = $4, stop_loss = $5, high_water_mark = $6, is_trailing_active = $7, updated_at = NOW()
+        WHERE id = $8
+      `, [pos.currentPrice, pos.unrealizedPnlUsd, pos.unrealizedPnlPct, pos.rMultiple, pos.stopLoss, pos.highWaterMark, pos.isTrailingActive, pos.id]).catch(() => {});
     }
   }
 
   // 2. Process New Paper Entries if Bot Enabled (Quality over Quantity)
   const maxOpen = Math.max(1, Math.min(settings.maxOpenPositions || 4, 8));
 
-  // Daily Trade Budget (Scales with user max open positions, minimum 6, preventing over-trading while allowing normal rotation)
+  // Daily Trade Budget
   const now = Date.now();
   const oneDayAgo = now - 24 * 60 * 60 * 1000;
   const recentTradesCount = [...openPositions, ...closedPositions].filter(p => p.entryTime >= oneDayAgo).length;
   const maxDailyTrades = Math.max(6, maxOpen * 2);
 
-  // Inter-Trade Spacing (Minimum 30 minutes between new positions across the portfolio to prevent flash-spike clustering)
+  // Inter-Trade Spacing (Minimum 30 minutes between new positions)
   const lastEntryTime = openPositions.length > 0 ? Math.max(...openPositions.map(p => p.entryTime)) : (closedPositions[0]?.entryTime || 0);
   const isCooldownActive = (now - lastEntryTime) < 30 * 60 * 1000 && openPositions.length > 0;
 
+  // Net Direction Bias Check
+  const numLongs = openPositions.filter(p => p.side === 'LONG').length;
+  const numShorts = openPositions.filter(p => p.side === 'SHORT').length;
+  const directionBias = numLongs - numShorts;
+
   if (settings.botEnabled && openPositions.length < maxOpen && recentTradesCount < maxDailyTrades && !isCooldownActive) {
-    const readySignals = signals.filter(s =>
-      s.status === 'ENTRY_READY' &&
-      s.aiScore >= (settings.minAiScore || 91) &&
-      !openPositions.some(p => p.symbol === s.symbol)
-    );
+    const readySignals = signals.filter(s => {
+      if (s.status !== 'ENTRY_READY' || s.aiScore < (settings.minAiScore || 91)) return false;
+      
+      // Filter 1: Don't open if we already have it
+      if (openPositions.some(p => p.symbol === s.symbol)) return false;
+      
+      // Filter 2: Per-Symbol SL Cooldown (8 hours)
+      const lastClosed = closedPositions.find(p => p.symbol === s.symbol);
+      if (lastClosed && lastClosed.closeReason === 'SL_HIT') {
+        if ((now - (lastClosed.closeTime || 0)) < 8 * 60 * 60 * 1000) {
+          return false; // Skip this symbol, SL was hit recently
+        }
+      }
+
+      // Filter 3: Directional Correlation Check
+      // If we are heavily long (bias >= 2), don't take shorts that might cancel out
+      // If we are heavily short (bias <= -2), don't take longs
+      const side = s.tradeThesis?.side || 'LONG';
+      if (side === 'SHORT' && directionBias >= 2) return false;
+      if (side === 'LONG' && directionBias <= -2) return false;
+
+      return true;
+    });
 
     for (const sig of readySignals) {
       if (openPositions.length >= maxOpen) break;
@@ -305,6 +370,12 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
   const riskPct = baseRiskPct;
   const riskAmountUsd = parseFloat(((currentEquity * riskPct) / 100).toFixed(2));
 
+  // Critical Bug Fix: Prevent 0.00 price entry
+  if (!sig.price || sig.price <= 0 || !sig.tradeThesis.stopLoss || sig.tradeThesis.stopLoss <= 0) {
+    logger.warn({ symbol: sig.symbol, price: sig.price, sl: sig.tradeThesis.stopLoss }, 'Paper entry skipped: Invalid price or SL (0.00)');
+    return;
+  }
+
   const riskDistPct = Math.abs((sig.price - sig.tradeThesis.stopLoss) / sig.price);
   // Position sizing: Risk Amount / Distance to SL (capped at 30% of account equity)
   const calculatedSize = riskDistPct > 0 ? riskAmountUsd / riskDistPct : 20;
@@ -328,6 +399,7 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
     entryPrice: sig.price,
     currentPrice: sig.price,
     stopLoss: sig.tradeThesis.stopLoss,
+    originalStopLoss: sig.tradeThesis.stopLoss,
     takeProfit: sig.tradeThesis.takeProfit,
     positionSizeUsd,
     quantity,
@@ -336,6 +408,8 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
     unrealizedPnlUsd: 0,
     unrealizedPnlPct: 0,
     rMultiple: 0,
+    highWaterMark: sig.price,
+    isTrailingActive: false,
     aiScoreAtEntry: sig.aiScore,
     setupType: sig.setupType,
     entryTime: Date.now(),
@@ -347,16 +421,16 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
   // Persist to Postgres
   await query(`
     INSERT INTO paper_positions (
-      id, asset_id, symbol, name, side, entry_price, current_price, stop_loss, take_profit,
-      position_size_usd, quantity, risk_amount_usd, risk_pct, ai_score_at_entry, setup_type,
+      id, asset_id, symbol, name, side, entry_price, current_price, stop_loss, original_stop_loss, take_profit,
+      position_size_usd, quantity, risk_amount_usd, risk_pct, high_water_mark, is_trailing_active, ai_score_at_entry, setup_type,
       status, entry_time, trade_thesis
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'OPEN', $16, $17
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'OPEN', $19, $20
     )
   `, [
     newPos.id, newPos.assetId, newPos.symbol, newPos.name, newPos.side, newPos.entryPrice,
-    newPos.currentPrice, newPos.stopLoss, newPos.takeProfit, newPos.positionSizeUsd, newPos.quantity,
-    newPos.riskAmountUsd, newPos.riskPct, newPos.aiScoreAtEntry, newPos.setupType, newPos.entryTime,
+    newPos.currentPrice, newPos.stopLoss, newPos.originalStopLoss, newPos.takeProfit, newPos.positionSizeUsd, newPos.quantity,
+    newPos.riskAmountUsd, newPos.riskPct, newPos.highWaterMark, newPos.isTrailingActive, newPos.aiScoreAtEntry, newPos.setupType, newPos.entryTime,
     JSON.stringify(newPos.tradeThesis)
   ]).catch(err => logger.error({ err }, 'Failed to insert open paper position into DB'));
 
@@ -386,11 +460,15 @@ async function closePositionInternal(id: string, closePrice: number, reason: 'TP
   const pos = openPositions[idx];
   openPositions.splice(idx, 1);
 
+  const safeClosePrice = (closePrice && closePrice > 0) ? closePrice : pos.currentPrice;
   const isLong = pos.side === 'LONG';
-  const priceDiff = isLong ? closePrice - pos.entryPrice : pos.entryPrice - closePrice;
+  const priceDiff = isLong ? safeClosePrice - pos.entryPrice : pos.entryPrice - safeClosePrice;
   const realizedPnlUsd = parseFloat((priceDiff * pos.quantity).toFixed(2));
-  const realizedPnlPct = parseFloat(((priceDiff / pos.entryPrice) * 100).toFixed(2));
-  const riskPriceDist = Math.abs(pos.entryPrice - pos.stopLoss);
+  
+  const safeEntryPrice = pos.entryPrice > 0 ? pos.entryPrice : 1;
+  const realizedPnlPct = parseFloat(((priceDiff / safeEntryPrice) * 100).toFixed(2));
+  
+  const riskPriceDist = Math.abs(pos.entryPrice - (pos.originalStopLoss || pos.stopLoss));
   const finalR = riskPriceDist > 0 ? parseFloat((priceDiff / riskPriceDist).toFixed(2)) : 0;
 
   const closedPos: ClosedPaperPosition = {
@@ -497,8 +575,11 @@ export async function editPaperPosition(id: string, updates: Partial<PaperPositi
     const isLong = p.side === 'LONG';
     const priceDiff = isLong ? p.currentPrice - p.entryPrice : p.entryPrice - p.currentPrice;
     p.unrealizedPnlUsd = parseFloat((priceDiff * p.quantity).toFixed(2));
-    p.unrealizedPnlPct = parseFloat(((priceDiff / p.entryPrice) * 100).toFixed(2));
-    const riskPriceDist = Math.abs(p.entryPrice - p.stopLoss);
+    
+    const safeEntryPrice = p.entryPrice > 0 ? p.entryPrice : 1;
+    p.unrealizedPnlPct = parseFloat(((priceDiff / safeEntryPrice) * 100).toFixed(2));
+    
+    const riskPriceDist = Math.abs(p.entryPrice - (p.originalStopLoss || p.stopLoss));
     p.rMultiple = riskPriceDist > 0 ? parseFloat((priceDiff / riskPriceDist).toFixed(2)) : 0;
 
     await query(`
@@ -540,11 +621,14 @@ export async function editPaperPosition(id: string, updates: Partial<PaperPositi
 
     // Recompute closed P&L and final R
     const isLong = cp.side === 'LONG';
-    const effectiveClosePrice = cp.closePrice || cp.entryPrice;
+    const effectiveClosePrice = (cp.closePrice && cp.closePrice > 0) ? cp.closePrice : cp.entryPrice;
     const priceDiff = isLong ? effectiveClosePrice - cp.entryPrice : cp.entryPrice - effectiveClosePrice;
     cp.realizedPnlUsd = parseFloat((priceDiff * cp.quantity).toFixed(2));
-    cp.realizedPnlPct = parseFloat(((priceDiff / cp.entryPrice) * 100).toFixed(2));
-    const riskPriceDist = Math.abs(cp.entryPrice - cp.stopLoss);
+    
+    const safeEntryPrice = cp.entryPrice > 0 ? cp.entryPrice : 1;
+    cp.realizedPnlPct = parseFloat(((priceDiff / safeEntryPrice) * 100).toFixed(2));
+    
+    const riskPriceDist = Math.abs(cp.entryPrice - (cp.originalStopLoss || cp.stopLoss));
     cp.finalR = riskPriceDist > 0 ? parseFloat((priceDiff / riskPriceDist).toFixed(2)) : 0;
 
     await query(`

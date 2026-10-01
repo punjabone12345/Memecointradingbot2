@@ -197,6 +197,10 @@ export async function initDB(): Promise<void> {
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_paper_positions_status ON paper_positions (status)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_paper_positions_entry_time ON paper_positions (entry_time DESC)`);
+  // Migration: add trailing stop / psychology columns
+  await query(`ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS original_stop_loss NUMERIC`).catch(() => {});
+  await query(`ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS high_water_mark NUMERIC`).catch(() => {});
+  await query(`ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS is_trailing_active BOOLEAN DEFAULT FALSE`).catch(() => {});
   // Migration: add timing columns (buy-detection timestamp + how long after detection we entered)
   await query(`ALTER TABLE sniper_positions ADD COLUMN IF NOT EXISTS buy_detected_timestamp BIGINT`).catch(() => {});
   await query(`ALTER TABLE sniper_positions ADD COLUMN IF NOT EXISTS entry_delay_ms BIGINT`).catch(() => {});
@@ -721,17 +725,17 @@ export async function initDB(): Promise<void> {
       created_at         BIGINT NOT NULL
     )
   `);
-  // One-time fresh restart: wipe previous AVAX trade & reset balance to clean $100.00 for 65-coin tiered SL/TP model
+  // One-time fresh restart: wipe history & reset balance to $1000 for strict momentum/reversion trader model
   try {
-    const resetCheck = await query<{ value: string }>("SELECT value FROM settings WHERE key = 'v4_65coins_clean_reset'").catch(() => []);
+    const resetCheck = await query<{ value: string }>("SELECT value FROM settings WHERE key = 'v5_strict_trader_reset'").catch(() => []);
     if (resetCheck.length === 0) {
       await queryQuiet("TRUNCATE TABLE paper_positions CASCADE;");
-      await queryQuiet("UPDATE settings SET value = '100.00' WHERE key = 'startingBalanceUsd'");
-      await queryQuiet("UPDATE settings SET value = '100.00' WHERE key = 'currentBalanceUsd'");
+      await queryQuiet("UPDATE settings SET value = '1000.00' WHERE key = 'startingBalanceUsd'");
+      await queryQuiet("UPDATE settings SET value = '1000.00' WHERE key = 'currentBalanceUsd'");
       await queryQuiet("UPDATE settings SET value = '91' WHERE key = 'minAiScore'");
       await queryQuiet("UPDATE settings SET value = '3' WHERE key = 'maxOpenPositions'");
-      await queryQuiet("INSERT INTO settings (key, value) VALUES ('v4_65coins_clean_reset', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'");
-      logger.info('V4 Clean Fresh Restart: paper_positions cleared, old AVAX trade removed, and balance reset to $100.00');
+      await queryQuiet("INSERT INTO settings (key, value) VALUES ('v5_strict_trader_reset', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'");
+      logger.info('V5 Strict Trader Reset: paper_positions cleared and balance reset to $1000.00');
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to check/apply fresh reset (non-fatal)');

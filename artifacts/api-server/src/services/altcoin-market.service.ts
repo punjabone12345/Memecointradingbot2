@@ -383,10 +383,21 @@ function computeRealSignal(
   let missingCondition: string | null = null;
 
   // Strict Institutional Price Action Filter (Volume >= $15M for alts, Non-Overextended)
-  const isLiquid = volume24h >= 15_000_000;
+  const isLiquid = volume24h >= 25_000_000; // Increased liquidity requirement
   const isAsymmetricRR = rrRatio >= 1.95;
-  const isQualifiedLong = side === 'LONG' && isBullishTrend && longValueScore >= 18 && rangeLocation >= 0.35 && rangeLocation <= 0.78 && isLiquid && isAsymmetricRR;
-  const isQualifiedShort = side === 'SHORT' && isBearishTrend && shortValueScore >= 18 && rangeLocation >= 0.22 && rangeLocation <= 0.65 && isLiquid && isAsymmetricRR;
+  
+  // 1. High-Probability Mean Reversion (Deep Pullback)
+  const isDeepPullbackLong = rangeLocation >= 0.20 && rangeLocation <= 0.45 && change24h >= -4.0 && change24h <= 2.0;
+  // 2. High-Probability Momentum Breakout
+  const isBreakoutLong = rangeLocation >= 0.85 && change24h >= 5.0;
+  
+  const isQualifiedLong = side === 'LONG' && isLiquid && isAsymmetricRR && (isDeepPullbackLong || isBreakoutLong);
+  
+  // High-Probability Shorts (Mean Reversion off Resistance or Breakdown)
+  const isRejectionShort = rangeLocation >= 0.60 && rangeLocation <= 0.80 && change24h >= -2.0 && change24h <= 4.0;
+  const isBreakdownShort = rangeLocation <= 0.15 && change24h <= -5.0;
+  
+  const isQualifiedShort = side === 'SHORT' && isLiquid && isAsymmetricRR && (isRejectionShort || isBreakdownShort);
 
   // Selective Quality Gate: AI Score >= 91 required (Quality over Quantity across 65 coins)
   const minRequiredScore = 91;
