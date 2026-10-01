@@ -311,12 +311,14 @@ async function computeRealSignal(
       if (isUptrend) {
         side = 'LONG';
         trendStr = 'BULLISH';
-        const highs = pivots.filter(p => p.type === 'HIGH');
-        const lows = pivots.filter(p => p.type === 'LOW');
         
-        if (highs.length > 0 && lows.length > 0) {
-          const recentHigh = highs[highs.length - 1].price;
-          const recentLow = lows[lows.length - 1].price;
+        // Find valid Bullish Leg: A recent Low followed by a recent High
+        const lastHigh = pivots.slice().reverse().find(p => p.type === 'HIGH');
+        const lastLow = lastHigh ? pivots.slice().reverse().find(p => p.type === 'LOW' && p.index < lastHigh.index) : null;
+        
+        if (lastHigh && lastLow) {
+          const recentHigh = lastHigh.price;
+          const recentLow = lastLow.price;
           const swingRange = recentHigh - recentLow;
           
           if (swingRange > 0) {
@@ -327,19 +329,20 @@ async function computeRealSignal(
             const oteTop = recentHigh - (swingRange * 0.618);
             const oteBottom = recentHigh - (swingRange * 0.786);
             
-            const bullishFvgs = fvgs.filter(f => f.type === 'BULLISH' && f.index >= lows[lows.length-1].index);
-            const activeFvg = bullishFvgs.length > 0 ? bullishFvgs[bullishFvgs.length - 1] : null;
-            const tappingFvg = activeFvg ? (price <= activeFvg.top && price >= activeFvg.bottom * 0.99) : false;
+            // FVG must overlap with OTE zone
+            const validFvgs = fvgs.filter(f => f.type === 'BULLISH' && f.index >= lastLow.index && f.index <= lastHigh.index);
+            const oteFvg = validFvgs.find(f => f.top >= oteBottom && f.bottom <= oteTop);
+            
+            const tappingFvg = oteFvg ? (price <= oteFvg.top && price >= oteFvg.bottom * 0.99) : false;
 
             structureDetails = `1H Swing: $${recentLow.toFixed(price<1?4:2)} - $${recentHigh.toFixed(price<1?4:2)}. OTE Zone: $${oteBottom.toFixed(price<1?4:2)} - $${oteTop.toFixed(price<1?4:2)}.`;
             
-            if (activeFvg) {
-              missingCondition = `Waiting for pullback into OTE + FVG ($${activeFvg.bottom.toFixed(price<1?4:2)} - $${activeFvg.top.toFixed(price<1?4:2)})`;
+            if (oteFvg) {
+              missingCondition = `Waiting for pullback into OTE + FVG ($${oteFvg.bottom.toFixed(price<1?4:2)} - $${oteFvg.top.toFixed(price<1?4:2)})`;
             } else {
-              missingCondition = `Waiting for price to reach OTE zone. No clear FVG formed yet.`;
+              missingCondition = `Waiting for price to reach OTE zone. No FVG in OTE.`;
             }
 
-            // Scoring
             if (isOTE && tappingFvg) {
               aiScore = 95;
               status = 'ENTRY_READY';
@@ -349,11 +352,11 @@ async function computeRealSignal(
               stopLoss = parseFloat((recentLow * 0.99).toFixed(price < 1 ? 4 : 2));
               takeProfit = parseFloat(recentHigh.toFixed(price < 1 ? 4 : 2));
             } else if (isDiscount) {
-              aiScore = 75 + (fibLevel * 10); // 80-85
+              aiScore = 75 + (fibLevel * 10);
               status = 'NEAR_ENTRY';
               reason = `1H Pullback in Discount Zone (Fib ${fibLevel.toFixed(2)}). ${structureDetails}`;
             } else {
-              aiScore = 50 + (fibLevel * 20); // 50-70
+              aiScore = 50 + (fibLevel * 20);
               reason = `1H Trend Bullish. Price in Premium. ${structureDetails}`;
             }
           }
@@ -361,12 +364,14 @@ async function computeRealSignal(
       } else {
         side = 'SHORT';
         trendStr = 'BEARISH';
-        const highs = pivots.filter(p => p.type === 'HIGH');
-        const lows = pivots.filter(p => p.type === 'LOW');
         
-        if (highs.length > 0 && lows.length > 0) {
-          const recentHigh = highs[highs.length - 1].price;
-          const recentLow = lows[lows.length - 1].price;
+        // Find valid Bearish Leg: A recent High followed by a recent Low
+        const lastLow = pivots.slice().reverse().find(p => p.type === 'LOW');
+        const lastHigh = lastLow ? pivots.slice().reverse().find(p => p.type === 'HIGH' && p.index < lastLow.index) : null;
+        
+        if (lastHigh && lastLow) {
+          const recentHigh = lastHigh.price;
+          const recentLow = lastLow.price;
           const swingRange = recentHigh - recentLow;
           
           if (swingRange > 0) {
@@ -377,16 +382,18 @@ async function computeRealSignal(
             const oteBottom = recentLow + (swingRange * 0.618);
             const oteTop = recentLow + (swingRange * 0.786);
             
-            const bearishFvgs = fvgs.filter(f => f.type === 'BEARISH' && f.index >= highs[highs.length-1].index);
-            const activeFvg = bearishFvgs.length > 0 ? bearishFvgs[bearishFvgs.length - 1] : null;
-            const tappingFvg = activeFvg ? (price >= activeFvg.bottom && price <= activeFvg.top * 1.01) : false;
+            // FVG must overlap with OTE zone
+            const validFvgs = fvgs.filter(f => f.type === 'BEARISH' && f.index >= lastHigh.index && f.index <= lastLow.index);
+            const oteFvg = validFvgs.find(f => f.bottom <= oteTop && f.top >= oteBottom);
+            
+            const tappingFvg = oteFvg ? (price >= oteFvg.bottom && price <= oteFvg.top * 1.01) : false;
 
             structureDetails = `1H Swing: $${recentHigh.toFixed(price<1?4:2)} - $${recentLow.toFixed(price<1?4:2)}. OTE Zone: $${oteBottom.toFixed(price<1?4:2)} - $${oteTop.toFixed(price<1?4:2)}.`;
             
-            if (activeFvg) {
-              missingCondition = `Waiting for relief rally into OTE + FVG ($${activeFvg.bottom.toFixed(price<1?4:2)} - $${activeFvg.top.toFixed(price<1?4:2)})`;
+            if (oteFvg) {
+              missingCondition = `Waiting for relief rally into OTE + FVG ($${oteFvg.bottom.toFixed(price<1?4:2)} - $${oteFvg.top.toFixed(price<1?4:2)})`;
             } else {
-              missingCondition = `Waiting for price to rally into OTE zone. No clear FVG formed yet.`;
+              missingCondition = `Waiting for price to rally into OTE zone. No FVG in OTE.`;
             }
 
             if (isOTE && tappingFvg) {
