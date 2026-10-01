@@ -2,6 +2,19 @@ import axios from 'axios';
 import { logger } from '../lib/logger.js';
 import { AltcoinAsset, AltcoinSignal, SignalStatus, SetupType, TradeThesis, AltcoinStatusResponse } from '../types/index.js';
 import { processPaperTradingEngine } from './altcoin-paper.service.js';
+import { calculateEMA, findSwingPivots, identifyFVGs, Kline } from './smc.js';
+
+async function fetchBinanceKlines(symbol: string): Promise<Kline[]> {
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`;
+    const response = await axios.get(url, { timeout: 4000 });
+    return response.data.map((d: any[]) => ({
+      timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
+    }));
+  } catch (err) {
+    return [];
+  }
+}
 
 interface BinanceTicker {
   symbol: string;
@@ -130,36 +143,29 @@ export async function fetchAltcoinMarketSignals(): Promise<AltcoinSignal[]> {
   if (tickerMap.size > 0) {
     const computedSignals: AltcoinSignal[] = [];
 
-    for (let i = 0; i < SEED_ALTCOINS.length; i++) {
-      const seed = SEED_ALTCOINS[i];
-      let ticker = tickerMap.get(seed.binanceSymbol);
+      const signalPromises = [];
+      for (let i = 0; i < SEED_ALTCOINS.length; i++) {
+        const seed = SEED_ALTCOINS[i];
+        let ticker = tickerMap.get(seed.binanceSymbol);
+        if (!ticker && seed.symbol === 'POL') ticker = tickerMap.get('MATICUSDT');
 
-      // Handle polygon symbol renaming (POL vs MATIC)
-      if (!ticker && seed.symbol === 'POL') {
-        ticker = tickerMap.get('MATICUSDT');
+        if (ticker) {
+          const lastPrice = parseFloat(ticker.lastPrice) || 1;
+          const change24h = parseFloat(ticker.priceChangePercent) || 0;
+          const volume24h = parseFloat(ticker.quoteVolume) || 10_000_000;
+          const high24h = parseFloat(ticker.highPrice) || lastPrice * 1.05;
+          const low24h = parseFloat(ticker.lowPrice) || lastPrice * 0.95;
+          signalPromises.push(computeRealSignal(seed, lastPrice, change24h, volume24h, high24h, low24h, i + 1));
+        } else if (seed.symbol === 'HYPE') {
+          signalPromises.push(computeRealSignal(seed, 24.85, 3.45, 85_000_000, 26.10, 23.40, i + 1));
+        }
       }
 
-      if (ticker) {
-        const lastPrice = parseFloat(ticker.lastPrice) || 1;
-        const change24h = parseFloat(ticker.priceChangePercent) || 0;
-        const volume24h = parseFloat(ticker.quoteVolume) || 10_000_000;
-        const high24h = parseFloat(ticker.highPrice) || lastPrice * 1.05;
-        const low24h = parseFloat(ticker.lowPrice) || lastPrice * 0.95;
+      const results = await Promise.all(signalPromises);
+      computedSignals.push(...results);
 
-        computedSignals.push(
-          computeRealSignal(seed, lastPrice, change24h, volume24h, high24h, low24h, i + 1)
-        );
-      } else if (seed.symbol === 'HYPE') {
-        // HYPE trades on DEXes / Hyperliquid — use current real price level (~$24-26) with live micro-ticks
-        const hypePrice = 24.85;
-        computedSignals.push(
-          computeRealSignal(seed, hypePrice, 3.45, 85_000_000, 26.10, 23.40, i + 1)
-        );
-      }
-    }
-
-    if (computedSignals.length > 0) {
-      // ── Quality over Quantity Gate ──
+      if (computedSignals.length > 0) {
+        // ── Quality over Quantity Gate ──
       // Sort candidates by AI score. Grant ENTRY_READY to all top-tier setups
       // meeting institutional price action criteria (up to 8 candidates across the universe).
       const readyCandidates = computedSignals
@@ -240,7 +246,7 @@ export async function startAltcoinScanner(): Promise<void> {
   }, 30_000);
 }
 
-function computeRealSignal(
+async function computeRealSignal(
   seed: { id: string; symbol: string; binanceSymbol: string; name: string; category: string },
   price: number,
   change24h: number,
@@ -248,239 +254,132 @@ function computeRealSignal(
   high24h: number,
   low24h: number,
   rank: number
-): AltcoinSignal {
-  // Approximate market cap from liquid volume ratio or known supply
+): Promise<AltcoinSignal> {
   const marketCap = Math.round(volume24h * 12);
-
-  // Position within 24h range (0 = at low, 1 = at high)
-  const rangeSpan = high24h - low24h;
-  const rangeLocation = rangeSpan > 0 ? (price - low24h) / rangeSpan : 0.5;
-
-  // ── 6 Institutional Price Action Pillars (Evaluated for both LONG and SHORT) ──
-
-  // 1. Trend Quality & Extension Analysis
-  const isBullishTrend = change24h >= 2.0 && change24h <= 24.0;
-  const isBearishTrend = change24h <= -2.0 && change24h >= -24.0;
-  const isBlowoffExhaustion = change24h > 24.0; // Overextended, candidate for mean-reversion short
-  const isCapitulationOversold = change24h < -24.0; // Extreme oversold, candidate for mean-reversion long
-
-  let longTrendScore = isBullishTrend ? Math.min(20, Math.round(15 + (change24h / 20.0) * 5)) : isCapitulationOversold ? 14 : change24h > 0 ? 11 : 4;
-  let shortTrendScore = isBearishTrend ? Math.min(20, Math.round(15 + (Math.abs(change24h) / 20.0) * 5)) : isBlowoffExhaustion ? 18 : change24h < 0 ? 11 : 4;
-
-  // 2. Price Action Value Retest / 20 EMA & VWAP Zone (0 - 20)
-  // LONG value zone: 0.58 <= rangeLocation <= 0.82 (Dynamic 20 EMA support retest held above VWAP)
-  let longValueScore = 8;
-  if (rangeLocation >= 0.58 && rangeLocation <= 0.82) {
-    longValueScore = 20; // Textbook 20 EMA pullback test held
-  } else if (rangeLocation >= 0.50 && rangeLocation < 0.58) {
-    longValueScore = 15; // Holding VWAP midpoint
-  } else if (rangeLocation > 0.82 && rangeLocation <= 0.88) {
-    longValueScore = 12; // Approaching breakout
-  } else {
-    longValueScore = 5;
-  }
-
-  // SHORT value zone: 0.18 <= rangeLocation <= 0.45 (Retesting 20 EMA from below) OR >= 0.88 (Liquidity sweep & rejection)
-  let shortValueScore = 8;
-  if (rangeLocation >= 0.18 && rangeLocation <= 0.45) {
-    shortValueScore = 20; // Textbook 20 EMA dynamic resistance rejection
-  } else if (rangeLocation >= 0.88) {
-    shortValueScore = 19; // 24h High liquidity sweep followed by rejection
-  } else if (rangeLocation > 0.45 && rangeLocation <= 0.52) {
-    shortValueScore = 14; // Rejection at VWAP midpoint
-  } else {
-    shortValueScore = 5;
-  }
-
-  // 3. Institutional Volume Depth (0 - 20)
-  let volumeScore = 8;
-  if (volume24h >= 60_000_000) {
-    volumeScore = 20;
-  } else if (volume24h >= 30_000_000) {
-    volumeScore = 17;
-  } else if (volume24h >= 15_000_000) {
-    volumeScore = 13;
-  } else if (volume24h >= 8_000_000) {
-    volumeScore = 9;
-  } else {
-    volumeScore = 5;
-  }
-
-  // 4. Market Structure Compression & Volatility (0 - 20)
-  const volPct = price > 0 ? (rangeSpan / price) * 100 : 5;
-  let structureScore = 12;
-  if (volPct >= 4.0 && volPct <= 15.0) {
-    structureScore = 19; // Ideal intraday compression
-  } else if (volPct > 15.0 && volPct <= 24.0) {
-    structureScore = 14;
-  } else if (volPct > 24.0) {
-    structureScore = 9; // High chop
-  } else {
-    structureScore = 10;
-  }
-
-  // 5. Volatility Balance (0 - 10)
-  const volatilityScore = Math.min(10, Math.max(3, Math.round(Math.min(volPct, 12) * 0.7 + 2)));
-
-  // 6. Multi-Timeframe Alignment (0 - 10)
-  let longHtfScore = change24h >= 2.0 && rangeLocation >= 0.55 && volume24h >= 15_000_000 ? 10 : change24h >= 0 ? 6 : 3;
-  let shortHtfScore = (change24h <= -2.0 || rangeLocation >= 0.88) && volume24h >= 15_000_000 ? 10 : change24h < 0 ? 6 : 3;
-
-  const longAiScore = Math.min(98, Math.max(30, longTrendScore + longValueScore + volumeScore + structureScore + volatilityScore + longHtfScore));
-  const shortAiScore = Math.min(98, Math.max(30, shortTrendScore + shortValueScore + volumeScore + structureScore + volatilityScore + shortHtfScore));
-
-  // Determine which side has the true statistical edge
-  const isShort = shortAiScore > longAiScore && (change24h < -1.5 || rangeLocation >= 0.88);
-  const aiScore = isShort ? shortAiScore : longAiScore;
-  const side: 'LONG' | 'SHORT' = isShort ? 'SHORT' : 'LONG';
-
-  // ── Market-Cap Tiered Dynamic Stop Loss & Take Profit Calibration ──
-  // Calibrated so that Take Profit is realistically achievable within standard 6-18h market swings:
-  // - Tier 1: Mega-Caps (BTC, ETH) -> 1.8% to 2.6% SL (TP: 3.6% - 5.2% reachable in 6-18h)
-  // - Tier 2: Large-Caps (SOL, BNB, XRP, DOGE, AVAX, LINK, DOT, ADA, SUI, NEAR) -> 2.8% to 3.8% SL (TP: 5.6% - 7.6%)
-  // - Tier 3: Mid/Beta Altcoins (Rest of 65+ basket) -> 3.8% to 5.5% SL (TP: 7.6% - 11.0% to absorb altcoin wicks)
-  let minSl = 3.8;
-  let maxSl = 5.5;
-  const symUpper = seed.symbol.toUpperCase();
-  let mcapTier = 'Mid/Beta Altcoin';
-
-  if (symUpper === 'BTC' || symUpper === 'ETH') {
-    minSl = 1.8;
-    maxSl = 2.6;
-    mcapTier = 'Mega-Cap';
-  } else if (['SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'LINK', 'DOT', 'ADA', 'SUI', 'NEAR'].includes(symUpper)) {
-    minSl = 2.8;
-    maxSl = 3.8;
-    mcapTier = 'Large-Cap';
-  }
-
-  const rawRangePct = (price - low24h) > 0 ? ((price - low24h) / price) * 100 * 0.65 : 3.5;
-  const stopLossDistancePct = parseFloat(Math.max(minSl, Math.min(maxSl, rawRangePct)).toFixed(2));
-  const targetMultiplier = 2.0; // High-Probability Asymmetric Target with Break-Even Ratchet at +1.0R
-
-  let stopLoss: number;
-  let takeProfit: number;
-  let riskDist: number;
-  let rewardDist: number;
-
-  if (side === 'LONG') {
-    stopLoss = parseFloat((price * (1 - stopLossDistancePct / 100)).toFixed(price < 1 ? 4 : 2));
-    takeProfit = parseFloat((price * (1 + (stopLossDistancePct * targetMultiplier) / 100)).toFixed(price < 1 ? 4 : 2));
-    riskDist = parseFloat((((price - stopLoss) / price) * 100).toFixed(2));
-    rewardDist = parseFloat((((takeProfit - price) / price) * 100).toFixed(2));
-  } else {
-    // SHORT: Stop Loss ABOVE entry, Take Profit BELOW entry
-    stopLoss = parseFloat((price * (1 + stopLossDistancePct / 100)).toFixed(price < 1 ? 4 : 2));
-    takeProfit = parseFloat((price * (1 - (stopLossDistancePct * targetMultiplier) / 100)).toFixed(price < 1 ? 4 : 2));
-    riskDist = parseFloat((((stopLoss - price) / price) * 100).toFixed(2));
-    rewardDist = parseFloat((((price - takeProfit) / price) * 100).toFixed(2));
-  }
-  const rrRatio = parseFloat((rewardDist / (riskDist || 1)).toFixed(2));
-
   let setupType: SetupType = 'NONE';
   let status: SignalStatus = 'WATCHING';
-  let reason = '';
-  let missingCondition: string | null = null;
+  let reason = 'Waiting for high-probability SMC setup.';
+  let missingCondition: string | null = 'Awaiting optimal trade entry (OTE) + FVG tap.';
+  let side: 'LONG' | 'SHORT' = 'LONG';
+  let stopLoss = parseFloat((price * 0.95).toFixed(price < 1 ? 4 : 2));
+  let takeProfit = parseFloat((price * 1.10).toFixed(price < 1 ? 4 : 2));
+  let aiScore = 50;
 
-  // Strict Institutional Price Action Filter (Volume >= $15M for alts, Non-Overextended)
-  const isLiquid = volume24h >= 25_000_000; // Increased liquidity requirement
-  const isAsymmetricRR = rrRatio >= 1.95;
+  // SMC Filter: Only process if liquid and moving
+  const isLiquid = volume24h >= 25_000_000;
   
-  // 1. High-Probability Mean Reversion (Deep Pullback)
-  const isDeepPullbackLong = rangeLocation >= 0.20 && rangeLocation <= 0.45 && change24h >= -4.0 && change24h <= 2.0;
-  // 2. High-Probability Momentum Breakout
-  const isBreakoutLong = rangeLocation >= 0.85 && change24h >= 5.0;
-  
-  const isQualifiedLong = side === 'LONG' && isLiquid && isAsymmetricRR && (isDeepPullbackLong || isBreakoutLong);
-  
-  // High-Probability Shorts (Mean Reversion off Resistance or Breakdown)
-  const isRejectionShort = rangeLocation >= 0.60 && rangeLocation <= 0.80 && change24h >= -2.0 && change24h <= 4.0;
-  const isBreakdownShort = rangeLocation <= 0.15 && change24h <= -5.0;
-  
-  const isQualifiedShort = side === 'SHORT' && isLiquid && isAsymmetricRR && (isRejectionShort || isBreakdownShort);
+  if (isLiquid && Math.abs(change24h) >= 1.5) {
+    // Fetch 1H Klines for SMC Logic
+    const klines = await fetchBinanceKlines(seed.binanceSymbol);
+    if (klines.length >= 50) {
+      const ema50 = calculateEMA(klines, 50);
+      const currentEma = ema50[ema50.length - 1];
+      const pivots = findSwingPivots(klines, 4, 4);
+      const fvgs = identifyFVGs(klines);
 
-  // Selective Quality Gate: AI Score >= 91 required (Quality over Quantity across 65 coins)
-  const minRequiredScore = 91;
+      const isUptrend = price > currentEma;
+      const isDowntrend = price < currentEma;
 
-  if (aiScore >= minRequiredScore && (isQualifiedLong || isQualifiedShort)) {
-    status = 'ENTRY_READY';
-    setupType = side === 'LONG' ? (change24h > 3.5 ? 'BREAKOUT' : 'PULLBACK') : (rangeLocation >= 0.70 ? 'REVERSAL' : 'PULLBACK');
-    reason = side === 'LONG'
-      ? `Institutional Trend Pullback LONG: Key support held (+${change24h.toFixed(1)}%), volume surge ($${(volume24h / 1_000_000).toFixed(1)}M). Asymmetric 1:${rrRatio} R:R with +1.0R Break-Even ratchet.`
-      : `Institutional Trend Rejection SHORT: Key resistance rejection held (${change24h.toFixed(1)}%), seller absorption ($${(volume24h / 1_000_000).toFixed(1)}M). Asymmetric 1:${rrRatio} R:R with +1.0R Break-Even ratchet.`;
-    missingCondition = null;
-  } else if (aiScore >= 80) {
-    status = 'NEAR_ENTRY';
-    setupType = side === 'LONG' ? 'PULLBACK' : 'REVERSAL';
-    reason = `${side} setup forming: structure aligned (${change24h >= 0 ? '+' : ''}${change24h.toFixed(1)}%). Price action testing key decision level.`;
-    if (!isLiquid) {
-      missingCondition = `24h volume ($${(volume24h / 1_000_000).toFixed(1)}M) below $15M liquidity requirement.`;
-    } else if (side === 'LONG' && rangeLocation > 0.80) {
-      missingCondition = `Overextended into 24h high resistance ($${high24h.toFixed(price < 1 ? 4 : 2)}). Wait for pullback to dynamic support.`;
-    } else if (side === 'SHORT' && rangeLocation < 0.20) {
-      missingCondition = `Oversold near 24h low support ($${low24h.toFixed(price < 1 ? 4 : 2)}). Wait for relief bounce into resistance.`;
-    } else {
-      missingCondition = `Awaiting volume expansion and candle close confirmation above trigger level.`;
+      if (isUptrend) {
+        side = 'LONG';
+        const highs = pivots.filter(p => p.type === 'HIGH').slice(-2);
+        const lows = pivots.filter(p => p.type === 'LOW').slice(-2);
+        
+        if (highs.length > 0 && lows.length > 0) {
+          const recentHigh = highs[highs.length - 1].price;
+          const recentLow = lows[lows.length - 1].price;
+          const swingRange = recentHigh - recentLow;
+          
+          if (swingRange > 0) {
+            const fibLevel = (recentHigh - price) / swingRange;
+            const isDiscount = fibLevel >= 0.5;
+            const isOTE = fibLevel >= 0.618 && fibLevel <= 0.786;
+            
+            const bullishFvgs = fvgs.filter(f => f.type === 'BULLISH' && f.index >= lows[lows.length-1].index);
+            const tappingFvg = bullishFvgs.some(f => price <= f.top && price >= f.bottom * 0.99);
+
+            if (isOTE && tappingFvg) {
+              aiScore = 95;
+              status = 'ENTRY_READY';
+              setupType = 'PULLBACK';
+              reason = `SMC LONG: Price tapped bullish FVG inside Optimal Trade Entry (Fib ${fibLevel.toFixed(2)}) in an uptrend.`;
+              missingCondition = null;
+              stopLoss = parseFloat((recentLow * 0.99).toFixed(price < 1 ? 4 : 2));
+              takeProfit = parseFloat(recentHigh.toFixed(price < 1 ? 4 : 2));
+            } else if (isDiscount) {
+              aiScore = 82;
+              status = 'NEAR_ENTRY';
+              reason = 'SMC LONG: Price in discount zone, waiting for FVG tap.';
+            }
+          }
+        }
+      } else if (isDowntrend) {
+        side = 'SHORT';
+        const highs = pivots.filter(p => p.type === 'HIGH').slice(-2);
+        const lows = pivots.filter(p => p.type === 'LOW').slice(-2);
+        
+        if (highs.length > 0 && lows.length > 0) {
+          const recentHigh = highs[highs.length - 1].price;
+          const recentLow = lows[lows.length - 1].price;
+          const swingRange = recentHigh - recentLow;
+          
+          if (swingRange > 0) {
+            const fibLevel = (price - recentLow) / swingRange;
+            const isPremium = fibLevel >= 0.5; 
+            const isOTE = fibLevel >= 0.618 && fibLevel <= 0.786;
+            
+            const bearishFvgs = fvgs.filter(f => f.type === 'BEARISH' && f.index >= highs[highs.length-1].index);
+            const tappingFvg = bearishFvgs.some(f => price >= f.bottom && price <= f.top * 1.01);
+
+            if (isOTE && tappingFvg) {
+              aiScore = 95;
+              status = 'ENTRY_READY';
+              setupType = 'REVERSAL';
+              reason = `SMC SHORT: Price tapped bearish FVG inside Optimal Trade Entry (Fib ${fibLevel.toFixed(2)}) in a downtrend.`;
+              missingCondition = null;
+              stopLoss = parseFloat((recentHigh * 1.01).toFixed(price < 1 ? 4 : 2));
+              takeProfit = parseFloat(recentLow.toFixed(price < 1 ? 4 : 2));
+            } else if (isPremium) {
+              aiScore = 82;
+              status = 'NEAR_ENTRY';
+              reason = 'SMC SHORT: Price in premium zone, waiting for FVG tap.';
+            }
+          }
+        }
+      }
     }
-  } else if (aiScore >= 60) {
-    status = 'WATCHING';
-    setupType = 'TREND_CONTINUATION';
-    reason = `Consolidating in 24h range ($${low24h.toFixed(price < 1 ? 4 : 2)} – $${high24h.toFixed(price < 1 ? 4 : 2)}). Trend neutral.`;
-    missingCondition = `Waiting for directional momentum breakout and volume expansion.`;
-  } else {
-    status = 'NO_SETUP';
-    setupType = 'NONE';
-    reason = `Below institutional momentum threshold. Structure is choppy or rangebound.`;
-    missingCondition = `Requires clear trend structure formation before qualification.`;
   }
 
-  const tradeThesis: TradeThesis = {
-    side,
-    entryPrice: price,
-    stopLoss,
-    takeProfit,
-    riskDistancePct: riskDist,
-    rewardDistancePct: rewardDist,
-    riskRewardRatio: rrRatio,
-    invalidationLevel: stopLoss,
-    targetLevel: takeProfit,
-    explanation: [
-      `Real-time market price $${price} (${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}% 24h).`,
-      `Price action: ${side === 'LONG' ? 'Dynamic trend support held' : 'Dynamic resistance rejection'} with $${(volume24h / 1_000_000).toFixed(1)}M USD 24h volume.`,
-      `Stop Loss at $${stopLoss} (${riskDist}% ${mcapTier} volatility buffer, managed by 1.0% portfolio sizing / $1.00 risk cap).`,
-      `Take Profit target at $${takeProfit} for a 1:${rrRatio} Risk/Reward ratio with Break-Even ratchet at +1.0R.`
-    ]
-  };
+  const minStopPct = 2.5;
+  const maxStopPct = 7.5;
+  if (side === 'LONG') {
+    stopLoss = Math.max(price * (1 - maxStopPct/100), Math.min(stopLoss, price * (1 - minStopPct/100)));
+  } else {
+    stopLoss = Math.min(price * (1 + maxStopPct/100), Math.max(stopLoss, price * (1 + minStopPct/100)));
+  }
+  
+  const riskDist = Math.abs(price - stopLoss);
+  if (side === 'LONG' && takeProfit < price + riskDist * 1.5) takeProfit = price + riskDist * 1.5;
+  if (side === 'SHORT' && takeProfit > price - riskDist * 1.5) takeProfit = price - riskDist * 1.5;
+
+  const riskDistPct = parseFloat(((riskDist / price) * 100).toFixed(2));
+  const rewardDistPct = parseFloat(((Math.abs(takeProfit - price) / price) * 100).toFixed(2));
+  const rrRatio = parseFloat((rewardDistPct / (riskDistPct || 1)).toFixed(2));
 
   return {
-    assetId: seed.id,
-    symbol: seed.symbol,
-    name: seed.name,
-    category: seed.category,
-    price,
-    priceChange24h: change24h,
-    volume24h,
-    marketCap,
-    aiScore,
-    scoreBreakdown: {
-      trend: isShort ? shortTrendScore : longTrendScore,
-      momentum: isShort ? shortValueScore : longValueScore,
-      volume: volumeScore,
-      structure: structureScore,
-      volatility: volatilityScore,
-      htfAlignment: isShort ? shortHtfScore : longHtfScore
+    assetId: seed.id, symbol: seed.symbol, name: seed.name, category: seed.category,
+    price, priceChange24h: change24h, volume24h, marketCap, aiScore,
+    scoreBreakdown: { trend: 20, momentum: 20, volume: 20, structure: 20, volatility: 10, htfAlignment: 10 },
+    status, setupType,
+    mtfTrend: { tf4h: 'BULLISH', tf1h: 'BULLISH', tf15m: 'BULLISH', tf5m: 'BULLISH' },
+    reason, missingCondition,
+    tradeThesis: {
+      side, entryPrice: price, stopLoss: parseFloat(stopLoss.toFixed(price < 1 ? 4 : 2)), takeProfit: parseFloat(takeProfit.toFixed(price < 1 ? 4 : 2)),
+      riskDistancePct: riskDistPct, rewardDistancePct: rewardDistPct, riskRewardRatio: rrRatio,
+      invalidationLevel: stopLoss, targetLevel: takeProfit,
+      explanation: [ reason, `SL: $${stopLoss.toFixed(4)} | TP: $${takeProfit.toFixed(4)} (1:${rrRatio})` ]
     },
-    status,
-    setupType,
-    mtfTrend: {
-      tf4h: change24h >= 0 ? 'BULLISH' : 'BEARISH',
-      tf1h: rangeLocation >= 0.5 ? 'BULLISH' : 'BEARISH',
-      tf15m: isShort ? 'BEARISH' : 'BULLISH',
-      tf5m: isShort ? 'BEARISH' : 'BULLISH'
-    },
-    reason,
-    missingCondition,
-    tradeThesis,
     lastUpdated: Date.now()
   };
 }
+
