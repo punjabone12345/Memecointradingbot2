@@ -727,7 +727,7 @@ export async function initDB(): Promise<void> {
   `);
   // One-time fresh restart: wipe history & reset balance to $1000 for strict momentum/reversion trader model
   try {
-    const resetCheck = await query<{ value: string }>("SELECT value FROM settings WHERE key = 'v6_mtf_settings_reset'").catch(() => []);
+    const resetCheck = await query<{ value: string }>("SELECT value FROM settings WHERE key = 'v7_strict_smc_reset'").catch(() => []);
     if (resetCheck.length === 0) {
       await queryQuiet("TRUNCATE TABLE paper_positions CASCADE;");
       
@@ -745,8 +745,8 @@ export async function initDB(): Promise<void> {
       await queryQuiet("INSERT INTO settings (key, value) VALUES ('maxOpenPositions', '10') ON CONFLICT (key) DO NOTHING");
       await queryQuiet("INSERT INTO settings (key, value) VALUES ('minRiskRewardRatio', '1.5') ON CONFLICT (key) DO NOTHING");
       
-      await queryQuiet("INSERT INTO settings (key, value) VALUES ('v6_mtf_settings_reset', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'");
-      logger.info('V6 MTF Reset: Portfolio wiped, balance set to $1000, risk 0.1%, max trades 10, min RRR 1.5');
+      await queryQuiet("INSERT INTO settings (key, value) VALUES ('v7_strict_smc_reset', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'");
+      logger.info('V7 Strict SMC Reset: Portfolio wiped, balance set to $1000, risk 0.1%, max trades 10, min RRR 1.5');
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to check/apply fresh reset (non-fatal)');
@@ -754,3 +754,4 @@ export async function initDB(): Promise<void> {
 
   logger.info('Database initialized successfully with persistent paper positions schema');
 }
+
