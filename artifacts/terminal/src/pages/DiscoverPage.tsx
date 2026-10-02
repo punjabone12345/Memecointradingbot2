@@ -137,7 +137,7 @@ export default function DiscoverPage({ status }: Props) {
       </div>
 
       {/* ── Active Portfolio Execution Capacity Banner ── */}
-      {status?.openPositions && status.openPositions.length >= 3 && (
+      {status?.openPositions && status.openPositions.length >= 10 && (
         <div style={{
           background: 'rgba(255,215,0,0.08)',
           border: '1px solid rgba(255,215,0,0.3)',

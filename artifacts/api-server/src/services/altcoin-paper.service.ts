@@ -271,7 +271,7 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
   }
 
   // 2. Process New Paper Entries if Bot Enabled (Quality over Quantity)
-  const maxOpen = Math.max(1, Math.min(settings.maxOpenPositions || 4, 8));
+  const maxOpen = Math.max(1, settings.maxOpenPositions || 10);
 
   // Daily Trade Budget
   const now = Date.now();
