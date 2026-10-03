@@ -15,7 +15,8 @@ import {
   notifyAltcoinTradeEntered,
   notifyAltcoinTPHit,
   notifyAltcoinSLHit,
-  notifyAltcoinTradeClosed
+  notifyAltcoinTradeClosed,
+  notifyAltcoinStopMovedToBE
 } from '../lib/telegram.js';
 
 let openPositions: PaperPosition[] = [];
@@ -241,6 +242,9 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
 
       if (stopMoved) {
         logger.info({ symbol: pos.symbol, newStop: pos.stopLoss, r: pos.rMultiple, isTrailing: pos.isTrailingActive }, 'Stop Loss trailed');
+        if (pos.stopLoss === pos.entryPrice) {
+          notifyAltcoinStopMovedToBE({ symbol: pos.symbol, side: pos.side, rMultiple: pos.rMultiple }).catch(() => {});
+        }
       }
 
       // Sync live unrealized metrics & updated ratcheted stop to DB
@@ -679,3 +683,6 @@ export async function resetPaperPortfolio(initialBalanceUsd = 100): Promise<Pape
   logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $100 balance, all positions cleared');
   return getPaperPortfolio();
 }
+
+
+

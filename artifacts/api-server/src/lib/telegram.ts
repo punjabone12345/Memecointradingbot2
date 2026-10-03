@@ -401,6 +401,19 @@ export async function notifyAltcoinTradeClosed(params: {
   );
 }
 
+export async function notifyAltcoinStopMovedToBE(params: {
+  symbol: string;
+  side: string;
+  rMultiple: number;
+}): Promise<void> {
+  await sendMessage(
+    ??? <b>BREAK-EVEN SECURED — $ + ${params.symbol}</b>\n +
+    <b>Side:</b>  | <b>Profit:</b> +R\n +
+    Stop loss has been ratcheted to entry price. Risk is now .00.\n +
+    <b>Time:</b>  + ${toIST(new Date())}
+  );
+}
+
 export async function testTelegramNotification(): Promise<{ success: boolean; error?: string }> {
   const creds = await getTelegramCredentials();
   if (!creds?.token || !creds?.chatId) {
@@ -421,4 +434,5 @@ export async function testTelegramNotification(): Promise<{ success: boolean; er
     return { success: false, error: err?.response?.data?.description || err?.message || 'Telegram API request failed' };
   }
 }
+
 
