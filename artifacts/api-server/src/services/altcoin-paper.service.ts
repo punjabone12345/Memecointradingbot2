@@ -226,8 +226,8 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
     } else {
       let stopMoved = false;
 
-      // 1. Break-Even Ratchet (+1.0R)
-      if (pos.rMultiple >= 1.0 && !pos.isTrailingActive) {
+      // 1. Break-Even Ratchet (+1.5R to be safe from deep wicks)
+      if (pos.rMultiple >= 1.5 && !pos.isTrailingActive) {
         if (isLong && pos.stopLoss < pos.entryPrice) {
           pos.stopLoss = pos.entryPrice;
           stopMoved = true;
@@ -237,25 +237,7 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
         }
       }
 
-      // 2. True Trailing Stop (+2.0R or higher) -> Lock in profits below high water mark
-      if (pos.rMultiple >= 2.0) {
-        pos.isTrailingActive = true;
-        const trailDist = riskPriceDist * 0.75; // Trail by 0.75R from peak
-        
-        if (isLong) {
-          const newStop = pos.highWaterMark - trailDist;
-          if (newStop > pos.stopLoss) {
-            pos.stopLoss = parseFloat(newStop.toFixed(pos.currentPrice < 1 ? 4 : 2));
-            stopMoved = true;
-          }
-        } else {
-          const newStop = pos.highWaterMark + trailDist;
-          if (newStop < pos.stopLoss) {
-            pos.stopLoss = parseFloat(newStop.toFixed(pos.currentPrice < 1 ? 4 : 2));
-            stopMoved = true;
-          }
-        }
-      }
+      // Disabled True Trailing Stop to respect SMC structural Take Profit levels.
 
       if (stopMoved) {
         logger.info({ symbol: pos.symbol, newStop: pos.stopLoss, r: pos.rMultiple, isTrailing: pos.isTrailingActive }, 'Stop Loss trailed');
