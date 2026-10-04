@@ -218,12 +218,10 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
     }
     // Check Stop Loss Exit
     else if ((isLong && pos.currentPrice <= pos.stopLoss) || (!isLong && pos.currentPrice >= pos.stopLoss)) {
-      await closePositionInternal(pos.id, pos.stopLoss, 'SL_HIT');
-    }
-    // Early Exit: Market Regime Change (AI Score drops below 45, indicating thesis invalidated)
-    else if (signal.aiScore < 45 && pos.rMultiple < 1.0) {
-      logger.info({ symbol: pos.symbol, aiScore: signal.aiScore, side: pos.side }, 'Early Exit: Market regime changed against position thesis');
-      await closePositionInternal(pos.id, pos.currentPrice, 'INVALIDATED');
+      let exitReason = 'SL_HIT';
+      if (pos.stopLoss === pos.entryPrice) exitReason = 'BREAK_EVEN';
+      else if ((isLong && pos.stopLoss > pos.entryPrice) || (!isLong && pos.stopLoss < pos.entryPrice)) exitReason = 'TRAILING_STOP';
+      await closePositionInternal(pos.id, pos.stopLoss, exitReason);
     } else {
       let stopMoved = false;
 
@@ -667,7 +665,7 @@ export async function deletePaperPosition(id: string): Promise<boolean> {
   return false;
 }
 
-export async function resetPaperPortfolio(initialBalanceUsd = 100): Promise<PaperPortfolio> {
+export async function resetPaperPortfolio(initialBalanceUsd = 1000): Promise<PaperPortfolio> {
   openPositions = [];
   closedPositions = [];
   dbLoaded = true;
@@ -675,12 +673,12 @@ export async function resetPaperPortfolio(initialBalanceUsd = 100): Promise<Pape
   await setBalance(initialBalanceUsd);
   await query("UPDATE settings SET value = $1 WHERE key = 'currentBalanceUsd'", [String(initialBalanceUsd)]).catch(() => {});
   await query("UPDATE settings SET value = $1 WHERE key = 'startingBalanceUsd'", [String(initialBalanceUsd)]).catch(() => {});
-  await query("UPDATE settings SET value = '1.0' WHERE key = 'riskPerTradePct'").catch(() => {});
-  await query("UPDATE settings SET value = '2' WHERE key = 'maxOpenPositions'").catch(() => {});
+  await query("UPDATE settings SET value = '0.1' WHERE key = 'riskPerTradePct'").catch(() => {});
+  await query("UPDATE settings SET value = '10' WHERE key = 'maxOpenPositions'").catch(() => {});
   await query("UPDATE settings SET value = '91' WHERE key = 'minAiScore'").catch(() => {});
   await query("TRUNCATE TABLE paper_positions CASCADE;").catch(() => {});
 
-  logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $100 balance, all positions cleared');
+  logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $1000 balance, all positions cleared');
   return getPaperPortfolio();
 }
 
