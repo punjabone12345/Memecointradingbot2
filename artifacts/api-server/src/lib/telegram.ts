@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import { logger } from './logger.js';
 import { getSettings } from '../services/settings.service.js';
 
@@ -23,7 +23,7 @@ async function getTelegramCredentials(): Promise<{ token: string; chatId: string
 async function sendMessage(text: string): Promise<void> {
   const creds = await getTelegramCredentials();
   if (!creds) {
-    logger.debug('Telegram notification skipped — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set');
+    logger.debug('Telegram notification skipped â€” TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set');
     return;
   }
   try {
@@ -53,7 +53,7 @@ export async function notifyBought(params: {
   const { name, symbol, price, mc, score, sizeSol } = params;
   const mcStr = mc > 0 ? `$${(mc / 1000).toFixed(0)}K` : '$0';
   await sendMessage(
-    `🟢 <b>BOUGHT ${symbol}</b> (${name})\n` +
+    `ðŸŸ¢ <b>BOUGHT ${symbol}</b> (${name})\n` +
     `Price: $${formatPrice(price)}\n` +
     `MC: ${mcStr}\n` +
     `Score: ${score}/100\n` +
@@ -77,9 +77,9 @@ export async function notifyTPHit(params: {
     slLine = `New SL: $${formatPrice(trailPrice)} (${trailPct}% below peak $${formatPrice(peakPrice)})`;
   }
   await sendMessage(
-    `🎯 <b>TP${level} HIT — ${symbol}</b> (${name})\n` +
+    `ðŸŽ¯ <b>TP${level} HIT â€” ${symbol}</b> (${name})\n` +
     `Gain: +${gainPct.toFixed(1)}%\n` +
-    `Entry: $${formatPrice(entryPrice)}  →  Now: $${formatPrice(currentPrice)}\n` +
+    `Entry: $${formatPrice(entryPrice)}  â†’  Now: $${formatPrice(currentPrice)}\n` +
     `Sold: ${soldSol.toFixed(4)} SOL  (+${profitSol.toFixed(4)} SOL profit)\n` +
     `Remaining: ${remainingSol.toFixed(4)} SOL (of ${initialSol.toFixed(4)} SOL)\n` +
     `${slLine}\n` +
@@ -91,7 +91,7 @@ export async function notifyClosed(params: {
   name: string; symbol: string; pnlSol: number; pnlPct: number; reason: string;
 }): Promise<void> {
   const { name, symbol, pnlSol, pnlPct, reason } = params;
-  const emoji = pnlSol >= 0 ? '🟢' : '🔴';
+  const emoji = pnlSol >= 0 ? 'ðŸŸ¢' : 'ðŸ”´';
   await sendMessage(
     `${emoji} <b>CLOSED ${symbol}</b> (${name})\n` +
     `PNL: ${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)\n` +
@@ -105,7 +105,7 @@ export async function notifyEmergencyExit(params: {
 }): Promise<void> {
   const { name, symbol, reason, pnlSol } = params;
   await sendMessage(
-    `⚠️ <b>EMERGENCY EXIT — ${symbol}</b> (${name})\n` +
+    `âš ï¸ <b>EMERGENCY EXIT â€” ${symbol}</b> (${name})\n` +
     `Reason: ${reason}\n` +
     `PNL: ${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL\n` +
     `Time: ${toIST(new Date())}`
@@ -117,7 +117,7 @@ export async function notifyDailySummary(params: {
 }): Promise<void> {
   const { trades, winRate, pnlSol } = params;
   await sendMessage(
-    `📊 <b>Daily Summary</b>\n` +
+    `ðŸ“Š <b>Daily Summary</b>\n` +
     `Trades: ${trades}\n` +
     `Win Rate: ${winRate.toFixed(1)}%\n` +
     `PNL: ${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL\n` +
@@ -130,7 +130,7 @@ export async function notifyHeartbeat(params: {
 }): Promise<void> {
   const { openPositions, balance } = params;
   await sendMessage(
-    `💓 <b>Heartbeat</b>\n` +
+    `ðŸ’“ <b>Heartbeat</b>\n` +
     `Open Positions: ${openPositions}\n` +
     `Balance: ${balance.toFixed(3)} SOL\n` +
     `Time: ${toIST(new Date())}`
@@ -142,7 +142,7 @@ export async function notifyDiscovered(params: {
 }): Promise<void> {
   const { symbol, mint, rugcheckOk } = params;
   await sendMessage(
-    `🔎 <b>NEW MIGRATED TOKEN</b>\n` +
+    `ðŸ”Ž <b>NEW MIGRATED TOKEN</b>\n` +
     `Token: $${symbol}\n` +
     `CA: <code>${mint}</code>\n` +
     `RugCheck: ${rugcheckOk ? 'PASSED' : 'FAILED'}\n` +
@@ -161,7 +161,7 @@ export async function notifyThresholdsReached(params: {
   const timeStr = `${String(elapsedMin).padStart(2, '0')}:${String(elapsedSecRem).padStart(2, '0')} / ${maxHours}:00:00`;
 
   await sendMessage(
-    `🎯 <b>THRESHOLDS REACHED</b>\n` +
+    `ðŸŽ¯ <b>THRESHOLDS REACHED</b>\n` +
     `$${symbol}\n` +
     `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
     `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
@@ -175,7 +175,7 @@ export async function notifySustainReset(params: {
 }): Promise<void> {
   const { symbol, reason, mc, liquidity } = params;
   await sendMessage(
-    `🔄 <b>SUSTAIN RESET</b>\n` +
+    `ðŸ”„ <b>SUSTAIN RESET</b>\n` +
     `$${symbol}\n` +
     `Reason: ${reason}\n` +
     `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
@@ -188,7 +188,7 @@ export async function notifySustainCompleted(params: {
 }): Promise<void> {
   const { symbol, mc, liquidity } = params;
   await sendMessage(
-    `✅ <b>SUSTAIN COMPLETED</b>\n` +
+    `âœ… <b>SUSTAIN COMPLETED</b>\n` +
     `$${symbol}\n` +
     `MC: $${mc.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
     `Liquidity: $${liquidity.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n` +
@@ -202,7 +202,7 @@ export async function notifyTrackingExpired(params: {
 }): Promise<void> {
   const { symbol } = params;
   await sendMessage(
-    `⏰ <b>TRACKING EXPIRED</b>\n` +
+    `â° <b>TRACKING EXPIRED</b>\n` +
     `$${symbol}\n` +
     `Reason: 2-hour tracking window exceeded\n` +
     `No trade executed.`
@@ -221,7 +221,7 @@ export async function notifySniperTrade(params: {
   const slStr = slMcap > 0 ? `$${(slMcap / 1000).toFixed(1)}k` : slPrice > 0 ? `$${formatPrice(slPrice)}` : 'Recent 20m Low';
 
   await sendMessage(
-    `🎯 <b>20 EMA RETRACE BUY — ${symbol}</b> (${name})\n` +
+    `ðŸŽ¯ <b>20 EMA RETRACE BUY â€” ${symbol}</b> (${name})\n` +
     `Strategy: 20 EMA Retrace (Pump Target +50% Hit)\n` +
     `CA: <code>${mint}</code>\n` +
     `Entry MC: ${mcStr}\n` +
@@ -240,12 +240,12 @@ export async function notifySniperClose(params: {
   entryPrice: number; exitPrice: number; sizeSol: number;
 }): Promise<void> {
   const { name, symbol, mint, pnlPct, pnlSol, reason, entryPrice, exitPrice, sizeSol } = params;
-  const emoji = pnlPct >= 0 ? '🟢' : '🔴';
+  const emoji = pnlPct >= 0 ? 'ðŸŸ¢' : 'ðŸ”´';
   await sendMessage(
-    `${emoji} <b>POSITION CLOSED — ${symbol}</b> (${name})\n` +
-    `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
+    `${emoji} <b>POSITION CLOSED â€” ${symbol}</b> (${name})\n` +
+    `Mint: <code>${mint.slice(0, 16)}â€¦</code>\n` +
     `PNL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n` +
-    `Entry: $${formatPrice(entryPrice)} → Exit: $${formatPrice(exitPrice)}\n` +
+    `Entry: $${formatPrice(entryPrice)} â†’ Exit: $${formatPrice(exitPrice)}\n` +
     `Size: ${sizeSol.toFixed(3)} SOL\n` +
     `Reason: ${reason}\n` +
     `Time: ${toIST(new Date())}`
@@ -269,10 +269,10 @@ export async function notifySniperTP(params: {
   const targetLabel = tpNum === 1 ? 'TP1 (+100%)' : tpNum === 2 ? 'TP2 (+250%)' : 'TP3 (+400%)';
 
   await sendMessage(
-    `🚀 <b>20 EMA ${targetLabel} HIT — ${symbol}</b> (${name})\n` +
-    `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
-    `Gain: +${gainPct.toFixed(1)}% (Entry $${formatPrice(entryPrice)} → Current $${formatPrice(currentPrice)})\n` +
-    `Sold Chunk: ${chunkSol.toFixed(4)} SOL → ${returnedSol.toFixed(4)} SOL (+${profitSol.toFixed(4)} profit)\n` +
+    `ðŸš€ <b>20 EMA ${targetLabel} HIT â€” ${symbol}</b> (${name})\n` +
+    `Mint: <code>${mint.slice(0, 16)}â€¦</code>\n` +
+    `Gain: +${gainPct.toFixed(1)}% (Entry $${formatPrice(entryPrice)} â†’ Current $${formatPrice(currentPrice)})\n` +
+    `Sold Chunk: ${chunkSol.toFixed(4)} SOL â†’ ${returnedSol.toFixed(4)} SOL (+${profitSol.toFixed(4)} profit)\n` +
     `Remaining: ${pctRemaining}% of position (${remainingSizeSol.toFixed(4)} SOL)\n` +
     `Total Banked: ${totalBanked.toFixed(4)} SOL\n` +
     `New SL: $${formatPrice(newSLPrice)} (${newSLDesc})\n` +
@@ -292,15 +292,15 @@ export async function notifySniperSkip(params: {
     extra = `\nPrice Slip: ${slip}% (max ${maxSlippagePct}%)\nDetected Price: $${formatPrice(priceAtBuyDetection)}\nCurrent: $${formatPrice(entryPrice)}`;
   }
   await sendMessage(
-    `⏭️ <b>WHALE SKIP — ${symbol}</b> (${name})\n` +
-    `Mint: <code>${mint.slice(0, 16)}…</code>\n` +
+    `â­ï¸ <b>WHALE SKIP â€” ${symbol}</b> (${name})\n` +
+    `Mint: <code>${mint.slice(0, 16)}â€¦</code>\n` +
     `Buyer Activity: $${buyAmountUsd.toFixed(0)}\n` +
     `Skip Reason: ${reason}${extra}\n` +
     `Time: ${toIST(new Date())}`
   );
 }
 
-// ── Altcoin Trading Bot Notifications ─────────────────────────────────────────
+// â”€â”€ Altcoin Trading Bot Notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function notifyAltcoinTradeEntered(params: {
   symbol: string;
@@ -317,14 +317,14 @@ export async function notifyAltcoinTradeEntered(params: {
   thesis: string[];
 }): Promise<void> {
   const { symbol, name, side, entryPrice, stopLoss, takeProfit, positionSizeUsd, riskAmountUsd, aiScore, setupType, rrRatio, thesis } = params;
-  const sideEmoji = side === 'LONG' ? '🟢 <b>LONG BUY</b>' : '🔴 <b>SHORT SELL</b>';
+  const sideEmoji = side === 'LONG' ? 'ðŸŸ¢ <b>LONG BUY</b>' : 'ðŸ”´ <b>SHORT SELL</b>';
   const riskPct = ((Math.abs(entryPrice - stopLoss) / entryPrice) * 100).toFixed(1);
   const rewardPct = ((Math.abs(takeProfit - entryPrice) / entryPrice) * 100).toFixed(1);
 
-  const thesisText = thesis.length > 0 ? `\n\n<b>Trade Thesis:</b>\n• ${thesis.slice(0, 3).join('\n• ')}` : '';
+  const thesisText = thesis.length > 0 ? `\n\n<b>Trade Thesis:</b>\nâ€¢ ${thesis.slice(0, 3).join('\nâ€¢ ')}` : '';
 
   await sendMessage(
-    `${sideEmoji} — <b>$${symbol}</b> (${name})\n` +
+    `${sideEmoji} â€” <b>$${symbol}</b> (${name})\n` +
     `<b>Setup:</b> ${setupType} | <b>AI Score:</b> ${aiScore}/100\n` +
     `<b>Entry:</b> $${formatPrice(entryPrice)}\n` +
     `<b>Stop Loss:</b> $${formatPrice(stopLoss)} (${riskPct}% risk)\n` +
@@ -348,9 +348,9 @@ export async function notifyAltcoinTPHit(params: {
 }): Promise<void> {
   const { symbol, name, side, entryPrice, closePrice, realizedPnlUsd, realizedPnlPct, finalR, currentEquityUsd } = params;
   await sendMessage(
-    `🎯 <b>TAKE PROFIT HIT — $${symbol}</b> (${name})\n` +
+    `ðŸŽ¯ <b>TAKE PROFIT HIT â€” $${symbol}</b> (${name})\n` +
     `<b>Side:</b> ${side}\n` +
-    `<b>Entry:</b> $${formatPrice(entryPrice)} → <b>Exit:</b> $${formatPrice(closePrice)}\n` +
+    `<b>Entry:</b> $${formatPrice(entryPrice)} â†’ <b>Exit:</b> $${formatPrice(closePrice)}\n` +
     `<b>Profit:</b> +$${realizedPnlUsd.toFixed(2)} USD (+${realizedPnlPct.toFixed(1)}% | +${finalR.toFixed(2)}R)\n` +
     `<b>Total Equity:</b> $${currentEquityUsd.toFixed(2)} USD\n` +
     `<b>Time:</b> ${toIST(new Date())}`
@@ -369,9 +369,9 @@ export async function notifyAltcoinSLHit(params: {
 }): Promise<void> {
   const { symbol, name, side, entryPrice, closePrice, realizedPnlUsd, realizedPnlPct, currentEquityUsd } = params;
   await sendMessage(
-    `🛑 <b>STOP LOSS HIT — $${symbol}</b> (${name})\n` +
+    `ðŸ›‘ <b>STOP LOSS HIT â€” $${symbol}</b> (${name})\n` +
     `<b>Side:</b> ${side}\n` +
-    `<b>Entry:</b> $${formatPrice(entryPrice)} → <b>Stopped:</b> $${formatPrice(closePrice)}\n` +
+    `<b>Entry:</b> $${formatPrice(entryPrice)} â†’ <b>Stopped:</b> $${formatPrice(closePrice)}\n` +
     `<b>Loss:</b> -$${Math.abs(realizedPnlUsd).toFixed(2)} USD (${realizedPnlPct.toFixed(1)}% | 1.0% Risk Protected)\n` +
     `<b>Total Equity:</b> $${currentEquityUsd.toFixed(2)} USD\n` +
     `<b>Time:</b> ${toIST(new Date())}`
@@ -390,11 +390,11 @@ export async function notifyAltcoinTradeClosed(params: {
   currentEquityUsd: number;
 }): Promise<void> {
   const { symbol, name, side, entryPrice, closePrice, realizedPnlUsd, realizedPnlPct, reason, currentEquityUsd } = params;
-  const emoji = realizedPnlUsd >= 0 ? '🟢' : '🔴';
+  const emoji = realizedPnlUsd >= 0 ? 'ðŸŸ¢' : 'ðŸ”´';
   await sendMessage(
-    `${emoji} <b>TRADE CLOSED — $${symbol}</b> (${name})\n` +
+    `${emoji} <b>TRADE CLOSED â€” $${symbol}</b> (${name})\n` +
     `<b>Side:</b> ${side} | <b>Reason:</b> ${reason}\n` +
-    `<b>Entry:</b> $${formatPrice(entryPrice)} → <b>Exit:</b> $${formatPrice(closePrice)}\n` +
+    `<b>Entry:</b> $${formatPrice(entryPrice)} â†’ <b>Exit:</b> $${formatPrice(closePrice)}\n` +
     `<b>P&L:</b> ${realizedPnlUsd >= 0 ? '+' : ''}$${realizedPnlUsd.toFixed(2)} USD (${realizedPnlPct >= 0 ? '+' : ''}${realizedPnlPct.toFixed(1)}%)\n` +
     `<b>Total Equity:</b> $${currentEquityUsd.toFixed(2)} USD\n` +
     `<b>Time:</b> ${toIST(new Date())}`
@@ -407,10 +407,10 @@ export async function notifyAltcoinStopMovedToBE(params: {
   rMultiple: number;
 }): Promise<void> {
   await sendMessage(
-    ??? <b>BREAK-EVEN SECURED � $ + ${params.symbol}</b>\n +
-    <b>Side:</b>  | <b>Profit:</b> +R\n +
-    Stop loss has been ratcheted to entry price. Risk is now .00.\n +
-    <b>Time:</b>  + ${toIST(new Date())}
+    `🛡️ <b>BREAK-EVEN SECURED — $${params.symbol}</b>\n` +
+    `<b>Side:</b> ${params.side} | <b>Profit:</b> +${params.rMultiple.toFixed(1)}R\n` +
+    `Stop loss has been ratcheted to entry price. Risk is now $0.00.\n` +
+    `<b>Time:</b> ${toIST(new Date())}`
   );
 }
 
@@ -420,7 +420,7 @@ export async function testTelegramNotification(): Promise<{ success: boolean; er
     return { success: false, error: 'Telegram bot token or chat ID is missing. Set them in settings or environment variables.' };
   }
   try {
-    const text = `🤖 <b>Altcoin Trading Bot: Telegram Alerts Activated!</b>\n` +
+    const text = `ðŸ¤– <b>Altcoin Trading Bot: Telegram Alerts Activated!</b>\n` +
       `Platform: AI-Assisted Intraday Paper Trading & Scanner\n` +
       `Time: ${toIST(new Date())}\n` +
       `Real-time trade entries, take profits, stop losses, and exits will be broadcast here.`;
@@ -434,5 +434,6 @@ export async function testTelegramNotification(): Promise<{ success: boolean; er
     return { success: false, error: err?.response?.data?.description || err?.message || 'Telegram API request failed' };
   }
 }
+
 
 
