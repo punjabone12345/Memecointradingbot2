@@ -284,8 +284,8 @@ async function computeRealSignal(
   const marketCap = Math.round(volume24h * 12);
   let setupType: SetupType = 'NONE';
   let status: SignalStatus = 'WATCHING';
-  let reason = 'Waiting for high-probability MTF SMC setup.';
-  let missingCondition: string | null = 'Scanning 4H/1H market structure...';
+  let reason = 'Waiting for high-probability Institutional Trend Pullback setup.';
+  let missingCondition: string | null = 'Scanning 4H/1H trends...';
   let side: 'LONG' | 'SHORT' = 'LONG';
   let stopLoss = parseFloat((price * 0.95).toFixed(price < 1 ? 4 : 2));
   let takeProfit = parseFloat((price * 1.10).toFixed(price < 1 ? 4 : 2));
@@ -293,180 +293,137 @@ async function computeRealSignal(
 
   let deepExplanation: string[] = [];
   const istTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true }) + " IST";
+  deepExplanation.push('[Generated: ' + istTime + ']');
 
-  const isLiquid = volume24h >= 15_000_000;
-  let mtfTrendBull = true;
+  try {
+    const klines4h = await fetchBinanceKlines(seed.binanceSymbol, '4h', 100);
+    const klines1h = await fetchBinanceKlines(seed.binanceSymbol, '1h', 150);
 
-  if (!isLiquid) {
-    reason = `Volume ($${(volume24h/1000000).toFixed(1)}M) too low for institutional MTF.`;
-    missingCondition = 'Needs > $15M 24h volume to qualify.';
-    aiScore = 40;
-  } else {
-    // 1. Fetch 4H and 1H Timeframes
-    const [klines4h, klines1h] = await Promise.all([
-      fetchBinanceKlines(seed.binanceSymbol, '4h', 100),
-      fetchBinanceKlines(seed.binanceSymbol, '1h', 100)
-    ]);
+    if (klines4h.length > 50 && klines1h.length > 50) {
+      // 1. MACRO TREND (4H 200 EMA)
+      const ema200_4h = calculateEMA(klines4h, 200);
+      const currentEma200_4h = ema200_4h[ema200_4h.length - 1];
+      const is4hBullish = klines4h[klines4h.length - 1].close > currentEma200_4h;
+      
+      // 2. MICRO TREND (1H 50 EMA & 200 EMA)
+      const ema50_1h = calculateEMA(klines1h, 50);
+      const ema200_1h = calculateEMA(klines1h, 200);
+      const currentEma50_1h = ema50_1h[ema50_1h.length - 1];
+      const currentEma200_1h = ema200_1h[ema200_1h.length - 1];
+      const is1hBullish = currentEma50_1h > currentEma200_1h;
+      
+      // 3. MOMENTUM & VOLATILITY (1H RSI & ATR)
+      // I am commenting out calculateRSI and ATR because I might not have imported them right at the top
+      // Wait, I DID inject calculateRSI and ATR into smc.ts. I need to make sure I update the import!
+      // But let's just do a simpler manual calculation here if needed... No, I'll use the imported ones if I add them.
+      // Wait, let's just write the ATR logic inline to be completely safe from import errors!
+      
+      let atrVal = 0;
+      let atrSum = 0;
+      for(let i = klines1h.length - 14; i < klines1h.length; i++) {
+         const h = klines1h[i].high;
+         const l = klines1h[i].low;
+         const pc = klines1h[i-1].close;
+         const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+         atrSum += tr;
+      }
+      const currentAtr = atrSum / 14;
 
-    if (klines4h.length >= 50 && klines1h.length >= 50) {
-      // 2. Macro Bias (4H)
-      const ema200_4h = calculateEMA(klines4h, 50); // 50 EMA on 4H
-      const currentEma4h = ema200_4h[ema200_4h.length - 1];
-      const isUptrend4H = price > currentEma4h;
-      mtfTrendBull = isUptrend4H;
+      let rsiVal = 50;
+      let gains = 0, losses = 0;
+      for(let i = klines1h.length - 14; i < klines1h.length; i++) {
+         const diff = klines1h[i].close - klines1h[i-1].close;
+         if (diff > 0) gains += diff; else losses -= diff;
+      }
+      const rs = losses === 0 ? 100 : (gains/14) / (losses/14);
+      rsiVal = 100 - (100 / (1 + rs));
 
-      // 3. 1H Structure & Execution
-      const pivots1h = findSwingPivots(klines1h, 4, 4);
-      const fvgs1h = identifyFVGs(klines1h);
+      const currentCandle = klines1h[klines1h.length - 1];
+      const isLiquid = volume24h > 5000000;
 
-      if (pivots1h.length >= 2) {
-        if (isUptrend4H) {
-          side = 'LONG';
-
-          // MUST pull back from a recent High. Most recent pivot must be HIGH.
-          const lastPivot = pivots1h[pivots1h.length - 1];
-          if (lastPivot.type === 'HIGH') {
-            const lastHigh1h = lastPivot;
-            const lastLow1h = pivots1h.slice().reverse().find(p => p.type === 'LOW' && p.index < lastHigh1h.index);
-            
-            if (lastHigh1h && lastLow1h) {
-              const swingRange = lastHigh1h.price - lastLow1h.price;
-              if (swingRange > 0) {
-                const oteTop = lastHigh1h.price - (swingRange * 0.618);
-                const oteBottom = lastHigh1h.price - (swingRange * 0.786);
-                
-                // Find Bullish FVGs formed during the upward leg
-                const validFvgs = fvgs1h.filter(f => f.type === 'BULLISH' && f.index >= lastLow1h.index && f.index <= lastHigh1h.index);
-                // FVG must overlap OTE zone
-                const oteFvg = validFvgs.find(f => f.top >= oteBottom && f.bottom <= oteTop);
-                
-                deepExplanation.push(`[Generated: ${istTime}]`);
-                deepExplanation.push(`MACRO (4H): Bullish (Price > 50-EMA @ $${currentEma4h.toFixed(price<1?4:2)})`);
-                deepExplanation.push(`STRUCTURE (1H): Impulsive Leg UP from $${lastLow1h.price.toFixed(price<1?4:2)} âž” $${lastHigh1h.price.toFixed(price<1?4:2)}`);
-                deepExplanation.push(`OTE ZONE (1H): $${oteBottom.toFixed(price<1?4:2)} âž” $${oteTop.toFixed(price<1?4:2)}`);
-                
-                if (!oteFvg) {
-                   missingCondition = 'Waiting for 1H Bullish FVG in OTE zone.';
-                   aiScore = 55;
-                   deepExplanation.push(`Waiting for a Bullish Fair Value Gap to form inside the OTE Zone.`);
-                } else {
-                   deepExplanation.push(`POI (1H): Valid FVG overlapping OTE at $${oteFvg.bottom.toFixed(price<1?4:2)} âž” $${oteFvg.top.toFixed(price<1?4:2)}`);
-                   
-                   // STRICT Entry logic: Price must tap into the FVG (no 1% buffer) and be in or below OTE top.
-                   // Also must not have invalidated the structure by breaking the swing low.
-                   if (price > oteTop || price > oteFvg.top) {
-                     missingCondition = 'Waiting for price to drop into OTE + FVG zone.';
-                     aiScore = 65;
-                     deepExplanation.push(`Current price ($${price.toFixed(price<1?4:2)}) is still above the required entry zone.`);
-                   } else if (price < lastLow1h.price) {
-                     missingCondition = 'Structure invalidated (Price broke swing low).';
-                     aiScore = 30;
-                     deepExplanation.push(`Setup INVALIDATED: Price dropped below the origin of the impulsive leg ($${lastLow1h.price.toFixed(price<1?4:2)}).`);
-                   } else {
-                     // Inside the sweet spot!
-                     aiScore = 95;
-                     status = 'ENTRY_READY';
-                     setupType = 'PULLBACK';
-                     reason = `MTF LONG: 4H Trend Bullish + Tapped 1H OTE FVG!`;
-                     missingCondition = null;
-                     stopLoss = parseFloat((lastLow1h.price * 0.995).toFixed(price < 1 ? 4 : 2));
-                     takeProfit = parseFloat(lastHigh1h.price.toFixed(price < 1 ? 4 : 2));
-                     deepExplanation.push(`THESIS: Price perfectly tapped the 1H OTE FVG zone in alignment with 4H Trend. Entering LONG to target the 1H Swing High.`);
-                   }
-                }
-              }
-            }
-          } else {
-            reason = '1H Structure: Waiting for new impulsive HIGH to form.';
-            missingCondition = 'Current leg is downwards, need a fresh Bullish Swing Leg.';
-            aiScore = 50;
-            deepExplanation.push(`[Generated: ${istTime}]`);
-            deepExplanation.push(`MACRO (4H): Bullish (Price > 50-EMA @ $${currentEma4h.toFixed(price<1?4:2)})`);
-            deepExplanation.push(`STRUCTURE (1H): The most recent confirmed pivot is a LOW. Waiting for a new impulsive HIGH to form before calculating pullback.`);
-          }
+      side = is4hBullish ? 'LONG' : 'SHORT';
+      const mtfTrendBull = is4hBullish;
+      
+      if (is4hBullish) {
+        deepExplanation.push('MACRO (4H): Bullish (Price > 200-EMA @ $' + currentEma200_4h.toFixed(price<1?4:2) + ')');
+        if (!is1hBullish) {
+          missingCondition = 'Waiting for 1H 50-EMA to cross above 200-EMA (Trend Alignment).';
+          aiScore = 40;
         } else {
-          side = 'SHORT';
-
-          // MUST pull back from a recent Low. Most recent pivot must be LOW.
-          const lastPivot = pivots1h[pivots1h.length - 1];
-          if (lastPivot.type === 'LOW') {
-            const lastLow1h = lastPivot;
-            const lastHigh1h = pivots1h.slice().reverse().find(p => p.type === 'HIGH' && p.index < lastLow1h.index);
-            
-            if (lastHigh1h && lastLow1h) {
-              const swingRange = lastHigh1h.price - lastLow1h.price;
-              if (swingRange > 0) {
-                const oteBottom = lastLow1h.price + (swingRange * 0.618);
-                const oteTop = lastLow1h.price + (swingRange * 0.786);
-                
-                // Find Bearish FVGs formed during the downward leg
-                const validFvgs = fvgs1h.filter(f => f.type === 'BEARISH' && f.index >= lastHigh1h.index && f.index <= lastLow1h.index);
-                // FVG must overlap OTE zone
-                const oteFvg = validFvgs.find(f => f.bottom <= oteTop && f.top >= oteBottom);
-                
-                deepExplanation.push(`[Generated: ${istTime}]`);
-                deepExplanation.push(`MACRO (4H): Bearish (Price < 50-EMA @ $${currentEma4h.toFixed(price<1?4:2)})`);
-                deepExplanation.push(`STRUCTURE (1H): Impulsive Leg DOWN from $${lastHigh1h.price.toFixed(price<1?4:2)} âž” $${lastLow1h.price.toFixed(price<1?4:2)}`);
-                deepExplanation.push(`OTE ZONE (1H): $${oteBottom.toFixed(price<1?4:2)} âž” $${oteTop.toFixed(price<1?4:2)}`);
-                
-                if (!oteFvg) {
-                   missingCondition = 'Waiting for 1H Bearish FVG in OTE zone.';
-                   aiScore = 55;
-                   deepExplanation.push(`Waiting for a Bearish Fair Value Gap to form inside the OTE Zone.`);
+          deepExplanation.push('MICRO (1H): Bullish (50-EMA > 200-EMA)');
+          // ENTRY: Pullback touching the 1H 50-EMA
+          if (currentCandle.low <= currentEma50_1h && currentCandle.close > currentEma50_1h) {
+             deepExplanation.push('ENTRY (1H): Price tapped dynamic support (50-EMA @ $' + currentEma50_1h.toFixed(price<1?4:2) + ') and rejected.');
+             if (rsiVal < 45) {
+                deepExplanation.push('MOMENTUM (1H): RSI dipped below 45, indicating momentum exhaustion.');
+                if (isLiquid) {
+                   setupType = 'PULLBACK';
+                   status = 'ENTRY_READY';
+                   reason = 'Perfect Institutional Trend Pullback detected.';
+                   missingCondition = null;
+                   aiScore = 95;
+                   stopLoss = price - (currentAtr * 2.5); // 2.5 ATR Stop Loss for wide crypto breathing room
+                   takeProfit = price + (currentAtr * 3.75); // 1.5 R:R strictly based on ATR
                 } else {
-                   deepExplanation.push(`POI (1H): Valid FVG overlapping OTE at $${oteFvg.bottom.toFixed(price<1?4:2)} âž” $${oteFvg.top.toFixed(price<1?4:2)}`);
-                   
-                   // STRICT Entry logic: Price must tap into the FVG (no 1% buffer) and be in or above OTE bottom.
-                   // Also must not have invalidated the structure by breaking the swing high.
-                   if (price < oteBottom || price < oteFvg.bottom) {
-                     missingCondition = 'Waiting for price to rally into OTE + FVG zone.';
-                     aiScore = 65;
-                     deepExplanation.push(`Current price ($${price.toFixed(price<1?4:2)}) is still below the required entry zone.`);
-                   } else if (price > lastHigh1h.price) {
-                     missingCondition = 'Structure invalidated (Price broke swing high).';
-                     aiScore = 30;
-                     deepExplanation.push(`Setup INVALIDATED: Price rallied above the origin of the impulsive leg ($${lastHigh1h.price.toFixed(price<1?4:2)}).`);
-                   } else {
-                     // Inside the sweet spot!
-                     aiScore = 95;
-                     status = 'ENTRY_READY';
-                     setupType = 'PULLBACK';
-                     reason = `MTF SHORT: 4H Trend Bearish + Tapped 1H OTE FVG!`;
-                     missingCondition = null;
-                     stopLoss = parseFloat((lastHigh1h.price * 1.005).toFixed(price < 1 ? 4 : 2));
-                     takeProfit = parseFloat(lastLow1h.price.toFixed(price < 1 ? 4 : 2));
-                     deepExplanation.push(`THESIS: Price perfectly rallied into the 1H OTE FVG zone in alignment with 4H Trend. Entering SHORT to target the 1H Swing Low.`);
-                   }
+                   missingCondition = 'Volume too low for safe entry.';
+                   aiScore = 60;
                 }
-              }
-            }
+             } else {
+                missingCondition = 'Waiting for RSI to signal momentum exhaustion (<45).';
+                aiScore = 65;
+             }
+          } else if (currentCandle.close <= currentEma50_1h) {
+             missingCondition = 'Price closed below 50-EMA (Support failed).';
+             aiScore = 30;
           } else {
-            reason = '1H Structure: Waiting for new impulsive LOW to form.';
-            missingCondition = 'Current leg is upwards, need a fresh Bearish Swing Leg.';
-            aiScore = 50;
-            deepExplanation.push(`[Generated: ${istTime}]`);
-            deepExplanation.push(`MACRO (4H): Bearish (Price < 50-EMA @ $${currentEma4h.toFixed(price<1?4:2)})`);
-            deepExplanation.push(`STRUCTURE (1H): The most recent confirmed pivot is a HIGH. Waiting for a new impulsive LOW to form before calculating pullback.`);
+             missingCondition = 'Waiting for price to pull back and tap 50-EMA support.';
+             aiScore = 60;
+          }
+        }
+      } else {
+        deepExplanation.push('MACRO (4H): Bearish (Price < 200-EMA @ $' + currentEma200_4h.toFixed(price<1?4:2) + ')');
+        if (is1hBullish) {
+          missingCondition = 'Waiting for 1H 50-EMA to cross below 200-EMA (Trend Alignment).';
+          aiScore = 40;
+        } else {
+          deepExplanation.push('MICRO (1H): Bearish (50-EMA < 200-EMA)');
+          if (currentCandle.high >= currentEma50_1h && currentCandle.close < currentEma50_1h) {
+             deepExplanation.push('ENTRY (1H): Price tapped dynamic resistance (50-EMA @ $' + currentEma50_1h.toFixed(price<1?4:2) + ') and rejected.');
+             if (rsiVal > 55) {
+                deepExplanation.push('MOMENTUM (1H): RSI pushed above 55, indicating momentum exhaustion.');
+                if (isLiquid) {
+                   setupType = 'PULLBACK';
+                   status = 'ENTRY_READY';
+                   reason = 'Perfect Institutional Trend Pullback detected.';
+                   missingCondition = null;
+                   aiScore = 95;
+                   stopLoss = price + (currentAtr * 2.5); 
+                   takeProfit = price - (currentAtr * 3.75); 
+                } else {
+                   missingCondition = 'Volume too low for safe entry.';
+                   aiScore = 60;
+                }
+             } else {
+                missingCondition = 'Waiting for RSI to signal momentum exhaustion (>55).';
+                aiScore = 65;
+             }
+          } else if (currentCandle.close >= currentEma50_1h) {
+             missingCondition = 'Price closed above 50-EMA (Resistance failed).';
+             aiScore = 30;
+          } else {
+             missingCondition = 'Waiting for price to rally and tap 50-EMA resistance.';
+             aiScore = 60;
           }
         }
       }
-    } else {
-      reason = 'Failed to fetch MTF Klines for SMC analysis.';
-      aiScore = 45;
-      deepExplanation.push('Data Error: Missing or incomplete 4H/1H candlesticks from Binance.');
     }
+  } catch (err: any) {
+    logger.warn({ symbol: seed.symbol, err: err?.message }, 'Failed to compute true technicals');
   }
 
-  aiScore = Math.min(99, Math.max(10, Math.round(aiScore)));
+  if (side === 'LONG' && stopLoss >= price) stopLoss = price * 0.95;
+  if (side === 'SHORT' && stopLoss <= price) stopLoss = price * 1.05;
 
-  const minStopPct = 1.5;
-  const maxStopPct = 10.0;
-  if (side === 'LONG') {
-    stopLoss = Math.max(price * (1 - maxStopPct/100), Math.min(stopLoss, price * (1 - minStopPct/100)));
-  } else {
-    stopLoss = Math.min(price * (1 + maxStopPct/100), Math.max(stopLoss, price * (1 + minStopPct/100)));
-  }
-  
   const riskDist = Math.abs(price - stopLoss);
   if (side === 'LONG' && takeProfit < price + riskDist * 1.5) takeProfit = price + riskDist * 1.5;
   if (side === 'SHORT' && takeProfit > price - riskDist * 1.5) takeProfit = price - riskDist * 1.5;
@@ -479,7 +436,10 @@ async function computeRealSignal(
     deepExplanation.push(reason);
     if (missingCondition) deepExplanation.push(missingCondition);
   }
-  deepExplanation.push(`SL: $${parseFloat(stopLoss.toFixed(price < 1 ? 4 : 2))} | TP: $${parseFloat(takeProfit.toFixed(price < 1 ? 4 : 2))} (1:${rrRatio})`);
+  deepExplanation.push('SL: $' + parseFloat(stopLoss.toFixed(price < 1 ? 4 : 2)) + ' | TP: $' + parseFloat(takeProfit.toFixed(price < 1 ? 4 : 2)) + ' (1:' + rrRatio + ')');
+
+  const mtfTrendBull = side === 'LONG';
+  const isLiquid = volume24h > 5000000;
 
   return {
     assetId: seed.id, symbol: seed.symbol, name: seed.name, category: seed.category,

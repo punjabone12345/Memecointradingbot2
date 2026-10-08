@@ -65,3 +65,55 @@ export function identifyFVGs(klines: Kline[]): FVG[] {
   }
   return fvgs;
 }
+
+export function calculateRSI(klines: Kline[], period: number = 14): number[] {
+  const rsi = new Array(klines.length).fill(50);
+  if (klines.length < period) return rsi;
+
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = klines[i].close - klines[i-1].close;
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  
+  for (let i = period; i < klines.length; i++) {
+    if (i > period) {
+      const diff = klines[i].close - klines[i-1].close;
+      const gain = diff > 0 ? diff : 0;
+      const loss = diff < 0 ? -diff : 0;
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsi[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + rs));
+  }
+  return rsi;
+}
+
+export function calculateATR(klines: Kline[], period: number = 14): number[] {
+  const atr = new Array(klines.length).fill(0);
+  if (klines.length < 2) return atr;
+  
+  let trSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const h = klines[i].high;
+    const l = klines[i].low;
+    const pc = klines[i-1].close;
+    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    trSum += tr;
+    atr[i] = trSum / i;
+  }
+  
+  for (let i = period + 1; i < klines.length; i++) {
+    const h = klines[i].high;
+    const l = klines[i].low;
+    const pc = klines[i-1].close;
+    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    atr[i] = (atr[i-1] * (period - 1) + tr) / period;
+  }
+  return atr;
+}
