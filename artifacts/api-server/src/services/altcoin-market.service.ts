@@ -2,7 +2,7 @@
 import { logger } from '../lib/logger.js';
 import { AltcoinAsset, AltcoinSignal, SignalStatus, SetupType, TradeThesis, AltcoinStatusResponse } from '../types/index.js';
 import { processPaperTradingEngine } from './altcoin-paper.service.js';
-import { calculateEMA, findSwingPivots, identifyFVGs, Kline } from './smc.js';
+import { calculateEMA, calculateRSI, calculateATR, Kline } from './smc.js';
 
 const klinesCache = new Map<string, { data: Kline[], timestamp: number }>();
 
@@ -272,6 +272,42 @@ export async function startAltcoinScanner(): Promise<void> {
   }, 30_000);
 }
 
+let cachedBtcRegime: { regime: 'BULLISH' | 'BEARISH' | 'NEUTRAL', timestamp: number } | null = null;
+
+async function getBitcoinMacroRegime(): Promise<'BULLISH' | 'BEARISH' | 'NEUTRAL'> {
+  const now = Date.now();
+  if (cachedBtcRegime && (now - cachedBtcRegime.timestamp < 300_000)) {
+    return cachedBtcRegime.regime;
+  }
+  try {
+    const btc4h = await fetchBinanceKlines('BTCUSDT', '4h', 250);
+    const btc1h = await fetchBinanceKlines('BTCUSDT', '1h', 250);
+    if (btc4h.length < 50 || btc1h.length < 50) return 'NEUTRAL';
+    const ema50_4h = calculateEMA(btc4h, 50);
+    const ema200_4h = calculateEMA(btc4h, 200);
+    const last4h = btc4h[btc4h.length - 2] || btc4h[btc4h.length - 1];
+    const ema50_1h = calculateEMA(btc1h, 50);
+    const last1h = btc1h[btc1h.length - 2] || btc1h[btc1h.length - 1];
+
+    const idx4h = btc4h.length - 2;
+    const btc4hBull = last4h.close > ema50_4h[idx4h] && ema50_4h[idx4h] > ema200_4h[idx4h];
+    const btc4hBear = last4h.close < ema50_4h[idx4h] && ema50_4h[idx4h] < ema200_4h[idx4h];
+
+    const idx1h = btc1h.length - 2;
+    const btc1hBull = last1h.close > ema50_1h[idx1h];
+    const btc1hBear = last1h.close < ema50_1h[idx1h];
+
+    let regime: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
+    if (btc4hBull && btc1hBull) regime = 'BULLISH';
+    else if (btc4hBear && btc1hBear) regime = 'BEARISH';
+
+    cachedBtcRegime = { regime, timestamp: now };
+    return regime;
+  } catch {
+    return 'NEUTRAL';
+  }
+}
+
 async function computeRealSignal(
   seed: { id: string; symbol: string; binanceSymbol: string; name: string; category: string },
   price: number,
@@ -284,11 +320,11 @@ async function computeRealSignal(
   const marketCap = Math.round(volume24h * 12);
   let setupType: SetupType = 'NONE';
   let status: SignalStatus = 'WATCHING';
-  let reason = 'Waiting for high-probability Institutional Trend Pullback setup.';
-  let missingCondition: string | null = 'Scanning 4H/1H trends...';
+  let reason = 'Waiting for high-conviction Momentum Pullback & Reversal confirmation.';
+  let missingCondition: string | null = 'Scanning 4H macro trend and 1H reversal trigger...';
   let side: 'LONG' | 'SHORT' = 'LONG';
   let stopLoss = parseFloat((price * 0.95).toFixed(price < 1 ? 4 : 2));
-  let takeProfit = parseFloat((price * 1.10).toFixed(price < 1 ? 4 : 2));
+  let takeProfit = parseFloat((price * 1.083).toFixed(price < 1 ? 4 : 2));
   let aiScore = 50;
 
   let deepExplanation: string[] = [];
@@ -296,137 +332,119 @@ async function computeRealSignal(
   deepExplanation.push('[Generated: ' + istTime + ']');
 
   try {
-    const klines4h = await fetchBinanceKlines(seed.binanceSymbol, '4h', 100);
-    const klines1h = await fetchBinanceKlines(seed.binanceSymbol, '1h', 150);
+    const [klines4h, klines1h, btcRegime] = await Promise.all([
+      fetchBinanceKlines(seed.binanceSymbol, '4h', 250),
+      fetchBinanceKlines(seed.binanceSymbol, '1h', 250),
+      getBitcoinMacroRegime()
+    ]);
 
-    if (klines4h.length > 50 && klines1h.length > 50) {
-      // 1. MACRO TREND (4H 200 EMA)
+    if (klines4h.length > 60 && klines1h.length > 60) {
+      // 1. MACRO 4H TREND
+      const ema50_4h = calculateEMA(klines4h, 50);
       const ema200_4h = calculateEMA(klines4h, 200);
-      const currentEma200_4h = ema200_4h[ema200_4h.length - 1];
-      const is4hBullish = klines4h[klines4h.length - 1].close > currentEma200_4h;
-      
-      // 2. MICRO TREND (1H 50 EMA & 200 EMA)
+      const idx4h = klines4h.length - 2; // Last COMPLETED 4H candle
+      const candle4h = klines4h[idx4h];
+      const is4hBull = candle4h.close > ema50_4h[idx4h] && ema50_4h[idx4h] > ema200_4h[idx4h];
+      const is4hBear = candle4h.close < ema50_4h[idx4h] && ema50_4h[idx4h] < ema200_4h[idx4h];
+
+      // 2. MICRO 1H STRUCTURE (Using LAST COMPLETED 1H candle - NEVER enter on unclosed bar!)
+      const ema20_1h = calculateEMA(klines1h, 20);
       const ema50_1h = calculateEMA(klines1h, 50);
-      const ema200_1h = calculateEMA(klines1h, 200);
-      const currentEma50_1h = ema50_1h[ema50_1h.length - 1];
-      const currentEma200_1h = ema200_1h[ema200_1h.length - 1];
-      const is1hBullish = currentEma50_1h > currentEma200_1h;
-      
-      // 3. MOMENTUM & VOLATILITY (1H RSI & ATR)
-      // I am commenting out calculateRSI and ATR because I might not have imported them right at the top
-      // Wait, I DID inject calculateRSI and ATR into smc.ts. I need to make sure I update the import!
-      // But let's just do a simpler manual calculation here if needed... No, I'll use the imported ones if I add them.
-      // Wait, let's just write the ATR logic inline to be completely safe from import errors!
-      
-      let atrVal = 0;
-      let atrSum = 0;
-      for(let i = klines1h.length - 14; i < klines1h.length; i++) {
-         const h = klines1h[i].high;
-         const l = klines1h[i].low;
-         const pc = klines1h[i-1].close;
-         const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-         atrSum += tr;
-      }
-      const currentAtr = atrSum / 14;
+      const rsi1h = calculateRSI(klines1h, 14);
+      const atr1h = calculateATR(klines1h, 14);
 
-      let rsiVal = 50;
-      let gains = 0, losses = 0;
-      for(let i = klines1h.length - 14; i < klines1h.length; i++) {
-         const diff = klines1h[i].close - klines1h[i-1].close;
-         if (diff > 0) gains += diff; else losses -= diff;
-      }
-      const rs = losses === 0 ? 100 : (gains/14) / (losses/14);
-      rsiVal = 100 - (100 / (1 + rs));
+      const idx1h = klines1h.length - 2;
+      const lastClosed = klines1h[idx1h];
+      const prevClosed = klines1h[idx1h - 1];
+      const currentAtr = atr1h[idx1h] || (price * 0.03);
 
-      const currentCandle = klines1h[klines1h.length - 1];
+      // 1H Volume SMA
+      let volSum = 0;
+      for (let v = idx1h - 20; v < idx1h; v++) {
+        volSum += (klines1h[v]?.volume || 0);
+      }
+      const volSma = volSum / 20;
+      const isVolumeValid = volSma > 0 ? (lastClosed.volume >= volSma * 1.05) : true;
       const isLiquid = volume24h > 5000000;
 
-      side = is4hBullish ? 'LONG' : 'SHORT';
-      const mtfTrendBull = is4hBullish;
-      
-      if (is4hBullish) {
-        deepExplanation.push('MACRO (4H): Bullish (Price > 200-EMA @ $' + currentEma200_4h.toFixed(price<1?4:2) + ')');
-        if (!is1hBullish) {
-          missingCondition = 'Waiting for 1H 50-EMA to cross above 200-EMA (Trend Alignment).';
-          aiScore = 40;
+      side = is4hBull ? 'LONG' : (is4hBear ? 'SHORT' : (btcRegime === 'BULLISH' ? 'LONG' : 'SHORT'));
+
+      // Check for Bullish Setup:
+      if (is4hBull && btcRegime !== 'BEARISH') {
+        deepExplanation.push('MACRO (4H): Bullish (EMA50 > EMA200 & Price > EMA50) | BTC Regime: ' + btcRegime);
+
+        // Check if RSI pulled back to value zone (30 - 48) within last 4 candles
+        const rsiHistory = [rsi1h[idx1h], rsi1h[idx1h - 1], rsi1h[idx1h - 2], rsi1h[idx1h - 3]];
+        const hadRsiPullback = rsiHistory.some(r => r >= 30 && r <= 48);
+
+        // Reversal confirmation: closed candle crossed back above 20-EMA, green candle, with volume
+        const crossedAboveEma20 = lastClosed.close > ema20_1h[idx1h] && prevClosed.close <= ema20_1h[idx1h - 1];
+        const isGreenCandle = lastClosed.close > lastClosed.open;
+
+        if (hadRsiPullback && crossedAboveEma20 && isGreenCandle && isVolumeValid && isLiquid) {
+          setupType = 'PULLBACK';
+          status = 'ENTRY_READY';
+          reason = 'Confirmed 4H Bullish Trend + 1H Reversal Cross above 20-EMA with Volume.';
+          missingCondition = null;
+          aiScore = 96;
+          stopLoss = price - (currentAtr * 1.5);
+          takeProfit = price + (currentAtr * 2.5); // 1 : 1.67 R:R
+          deepExplanation.push('CONFIRMED REVERSAL (1H): Closed green bar crossed EMA20 ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ') with volume confirmation.');
+        } else if (!hadRsiPullback) {
+          missingCondition = 'Waiting for 1H RSI to pull back into value zone (30-48). Current RSI: ' + rsi1h[idx1h].toFixed(1);
+          aiScore = 65;
+        } else if (!crossedAboveEma20 || !isGreenCandle) {
+          missingCondition = 'Waiting for 1H candle to close GREEN back above 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ').';
+          aiScore = 70;
         } else {
-          deepExplanation.push('MICRO (1H): Bullish (50-EMA > 200-EMA)');
-          // ENTRY: Pullback touching the 1H 50-EMA
-          if (currentCandle.low <= currentEma50_1h && currentCandle.close > currentEma50_1h) {
-             deepExplanation.push('ENTRY (1H): Price tapped dynamic support (50-EMA @ $' + currentEma50_1h.toFixed(price<1?4:2) + ') and rejected.');
-             if (rsiVal < 45) {
-                deepExplanation.push('MOMENTUM (1H): RSI dipped below 45, indicating momentum exhaustion.');
-                if (isLiquid) {
-                   setupType = 'PULLBACK';
-                   status = 'ENTRY_READY';
-                   reason = 'Perfect Institutional Trend Pullback detected.';
-                   missingCondition = null;
-                   aiScore = 95;
-                   stopLoss = price - (currentAtr * 2.5); // 2.5 ATR Stop Loss for wide crypto breathing room
-                   takeProfit = price + (currentAtr * 3.75); // 1.5 R:R strictly based on ATR
-                } else {
-                   missingCondition = 'Volume too low for safe entry.';
-                   aiScore = 60;
-                }
-             } else {
-                missingCondition = 'Waiting for RSI to signal momentum exhaustion (<45).';
-                aiScore = 65;
-             }
-          } else if (currentCandle.close <= currentEma50_1h) {
-             missingCondition = 'Price closed below 50-EMA (Support failed).';
-             aiScore = 30;
-          } else {
-             missingCondition = 'Waiting for price to pull back and tap 50-EMA support.';
-             aiScore = 60;
-          }
+          missingCondition = 'Waiting for volume breakout confirmation.';
+          aiScore = 60;
+        }
+      }
+      // Check for Bearish Setup:
+      else if (is4hBear && btcRegime !== 'BULLISH') {
+        deepExplanation.push('MACRO (4H): Bearish (EMA50 < EMA200 & Price < EMA50) | BTC Regime: ' + btcRegime);
+
+        const rsiHistory = [rsi1h[idx1h], rsi1h[idx1h - 1], rsi1h[idx1h - 2], rsi1h[idx1h - 3]];
+        const hadRsiRally = rsiHistory.some(r => r >= 52 && r <= 70);
+
+        const crossedBelowEma20 = lastClosed.close < ema20_1h[idx1h] && prevClosed.close >= ema20_1h[idx1h - 1];
+        const isRedCandle = lastClosed.close < lastClosed.open;
+
+        if (hadRsiRally && crossedBelowEma20 && isRedCandle && isVolumeValid && isLiquid) {
+          setupType = 'PULLBACK';
+          status = 'ENTRY_READY';
+          reason = 'Confirmed 4H Bearish Trend + 1H Reversal Cross below 20-EMA with Volume.';
+          missingCondition = null;
+          aiScore = 96;
+          stopLoss = price + (currentAtr * 1.5);
+          takeProfit = price - (currentAtr * 2.5); // 1 : 1.67 R:R
+          deepExplanation.push('CONFIRMED REVERSAL (1H): Closed red bar crossed below EMA20 ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ') with volume confirmation.');
+        } else if (!hadRsiRally) {
+          missingCondition = 'Waiting for 1H RSI to rally into premium zone (52-70). Current RSI: ' + rsi1h[idx1h].toFixed(1);
+          aiScore = 65;
+        } else if (!crossedBelowEma20 || !isRedCandle) {
+          missingCondition = 'Waiting for 1H candle to close RED back below 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ').';
+          aiScore = 70;
+        } else {
+          missingCondition = 'Waiting for volume breakdown confirmation.';
+          aiScore = 60;
         }
       } else {
-        deepExplanation.push('MACRO (4H): Bearish (Price < 200-EMA @ $' + currentEma200_4h.toFixed(price<1?4:2) + ')');
-        if (is1hBullish) {
-          missingCondition = 'Waiting for 1H 50-EMA to cross below 200-EMA (Trend Alignment).';
-          aiScore = 40;
-        } else {
-          deepExplanation.push('MICRO (1H): Bearish (50-EMA < 200-EMA)');
-          if (currentCandle.high >= currentEma50_1h && currentCandle.close < currentEma50_1h) {
-             deepExplanation.push('ENTRY (1H): Price tapped dynamic resistance (50-EMA @ $' + currentEma50_1h.toFixed(price<1?4:2) + ') and rejected.');
-             if (rsiVal > 55) {
-                deepExplanation.push('MOMENTUM (1H): RSI pushed above 55, indicating momentum exhaustion.');
-                if (isLiquid) {
-                   setupType = 'PULLBACK';
-                   status = 'ENTRY_READY';
-                   reason = 'Perfect Institutional Trend Pullback detected.';
-                   missingCondition = null;
-                   aiScore = 95;
-                   stopLoss = price + (currentAtr * 2.5); 
-                   takeProfit = price - (currentAtr * 3.75); 
-                } else {
-                   missingCondition = 'Volume too low for safe entry.';
-                   aiScore = 60;
-                }
-             } else {
-                missingCondition = 'Waiting for RSI to signal momentum exhaustion (>55).';
-                aiScore = 65;
-             }
-          } else if (currentCandle.close >= currentEma50_1h) {
-             missingCondition = 'Price closed above 50-EMA (Resistance failed).';
-             aiScore = 30;
-          } else {
-             missingCondition = 'Waiting for price to rally and tap 50-EMA resistance.';
-             aiScore = 60;
-          }
-        }
+        missingCondition = 'Market in consolidation / conflicting macro trend (BTC: ' + btcRegime + ').';
+        aiScore = 40;
       }
     }
   } catch (err: any) {
     logger.warn({ symbol: seed.symbol, err: err?.message }, 'Failed to compute true technicals');
   }
 
-  if (side === 'LONG' && stopLoss >= price) stopLoss = price * 0.95;
-  if (side === 'SHORT' && stopLoss <= price) stopLoss = price * 1.05;
+  if (side === 'LONG' && stopLoss >= price) stopLoss = price * 0.96;
+  if (side === 'SHORT' && stopLoss <= price) stopLoss = price * 1.04;
 
   const riskDist = Math.abs(price - stopLoss);
-  if (side === 'LONG' && takeProfit < price + riskDist * 1.5) takeProfit = price + riskDist * 1.5;
-  if (side === 'SHORT' && takeProfit > price - riskDist * 1.5) takeProfit = price - riskDist * 1.5;
+  if (side === 'LONG' && takeProfit < price + riskDist * 1.5) takeProfit = price + riskDist * 1.67;
+  if (side === 'SHORT' && takeProfit > price - riskDist * 1.5) takeProfit = price - riskDist * 1.67;
 
   const riskDistPct = parseFloat(((riskDist / price) * 100).toFixed(2));
   const rewardDistPct = parseFloat(((Math.abs(takeProfit - price) / price) * 100).toFixed(2));

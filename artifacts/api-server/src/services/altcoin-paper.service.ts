@@ -273,6 +273,7 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
   const directionBias = numLongs - numShorts;
 
   if (settings.botEnabled && openPositions.length < maxOpen && recentTradesCount < maxDailyTrades && !isCooldownActive) {
+    const MAX_SAME_DIRECTION = 3;
     const readySignals = signals.filter(s => {
       if (s.status !== 'ENTRY_READY' || s.aiScore < (settings.minAiScore || 91)) return false;
       
@@ -283,23 +284,22 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
       const lastClosed = closedPositions.find(p => p.symbol === s.symbol);
       if (lastClosed && lastClosed.closeReason === 'SL_HIT') {
         if ((now - (lastClosed.closeTime || 0)) < 8 * 60 * 60 * 1000) {
-          return false; // Skip this symbol, SL was hit recently
+          return false;
         }
       }
 
-      // Filter 3: Directional Correlation Check
-      // If we are heavily long (bias >= 2), don't take shorts that might cancel out
-      // If we are heavily short (bias <= -2), don't take longs
+      // Filter 3: Directional Cap (Max 3 in the same direction)
       const side = s.tradeThesis?.side || 'LONG';
-      if (side === 'SHORT' && directionBias >= 2) return false;
-      if (side === 'LONG' && directionBias <= -2) return false;
+      if (side === 'LONG' && numLongs >= MAX_SAME_DIRECTION) return false;
+      if (side === 'SHORT' && numShorts >= MAX_SAME_DIRECTION) return false;
 
       return true;
     });
 
-    for (const sig of readySignals) {
-      if (openPositions.length >= maxOpen) break;
-      await executePaperEntry(sig, settings);
+    // Execute at most 1 high-conviction trade per scan cycle to ensure optimal trade spacing
+    if (readySignals.length > 0 && openPositions.length < maxOpen) {
+      const bestSignal = readySignals.sort((a, b) => b.aiScore - a.aiScore)[0];
+      await executePaperEntry(bestSignal, settings);
     }
   }
 
