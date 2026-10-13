@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import { logger } from '../lib/logger.js';
 import { AltcoinAsset, AltcoinSignal, SignalStatus, SetupType, TradeThesis, AltcoinStatusResponse } from '../types/index.js';
 import { processPaperTradingEngine } from './altcoin-paper.service.js';
@@ -388,7 +388,7 @@ async function computeRealSignal(
           missingCondition = null;
           aiScore = 96;
           stopLoss = price - (currentAtr * 1.5);
-          takeProfit = price + (currentAtr * 2.5); // 1 : 1.67 R:R
+          takeProfit = price + (currentAtr * 3.0); // 1 : 2.0 R:R
           deepExplanation.push('CONFIRMED REVERSAL (1H): Closed green bar crossed EMA20 ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ') with volume confirmation.');
         } else if (!hadRsiPullback) {
           missingCondition = 'Waiting for 1H RSI to pull back into value zone (30-48). Current RSI: ' + rsi1h[idx1h].toFixed(1);
@@ -418,7 +418,7 @@ async function computeRealSignal(
           missingCondition = null;
           aiScore = 96;
           stopLoss = price + (currentAtr * 1.5);
-          takeProfit = price - (currentAtr * 2.5); // 1 : 1.67 R:R
+          takeProfit = price - (currentAtr * 3.0); // 1 : 2.0 R:R
           deepExplanation.push('CONFIRMED REVERSAL (1H): Closed red bar crossed below EMA20 ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ') with volume confirmation.');
         } else if (!hadRsiRally) {
           missingCondition = 'Waiting for 1H RSI to rally into premium zone (52-70). Current RSI: ' + rsi1h[idx1h].toFixed(1);
@@ -443,8 +443,8 @@ async function computeRealSignal(
   if (side === 'SHORT' && stopLoss <= price) stopLoss = price * 1.04;
 
   const riskDist = Math.abs(price - stopLoss);
-  if (side === 'LONG' && takeProfit < price + riskDist * 1.5) takeProfit = price + riskDist * 1.67;
-  if (side === 'SHORT' && takeProfit > price - riskDist * 1.5) takeProfit = price - riskDist * 1.67;
+  if (side === 'LONG' && takeProfit < price + riskDist * 1.8) takeProfit = price + riskDist * 2.0;
+  if (side === 'SHORT' && takeProfit > price - riskDist * 1.8) takeProfit = price - riskDist * 2.0;
 
   const riskDistPct = parseFloat(((riskDist / price) * 100).toFixed(2));
   const rewardDistPct = parseFloat(((Math.abs(takeProfit - price) / price) * 100).toFixed(2));
