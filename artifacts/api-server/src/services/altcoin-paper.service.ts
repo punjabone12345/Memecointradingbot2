@@ -272,7 +272,11 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
   const numShorts = openPositions.filter(p => p.side === 'SHORT').length;
   const directionBias = numLongs - numShorts;
 
-  if (settings.botEnabled && openPositions.length < maxOpen && recentTradesCount < maxDailyTrades && !isCooldownActive) {
+  // Daily Drawdown Circuit Breaker (Max 3 losses per 24 hours to prevent drawdown cascades)
+  const last24hSlCount = closedPositions.filter(p => (p.closeTime || 0) >= oneDayAgo && p.closeReason === 'SL_HIT').length;
+  const isCircuitBreakerTripped = last24hSlCount >= 3;
+
+  if (settings.botEnabled && openPositions.length < maxOpen && recentTradesCount < maxDailyTrades && !isCooldownActive && !isCircuitBreakerTripped) {
     const MAX_SAME_DIRECTION = 3;
     const readySignals = signals.filter(s => {
       if (s.status !== 'ENTRY_READY' || s.aiScore < (settings.minAiScore || 91)) return false;
