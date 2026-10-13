@@ -678,8 +678,9 @@ export async function resetPaperPortfolio(initialBalanceUsd = 1000): Promise<Pap
   await query("UPDATE settings SET value = $1 WHERE key = 'currentBalanceUsd'", [String(initialBalanceUsd)]).catch(() => {});
   await query("UPDATE settings SET value = $1 WHERE key = 'startingBalanceUsd'", [String(initialBalanceUsd)]).catch(() => {});
   await query("UPDATE settings SET value = '0.1' WHERE key = 'riskPerTradePct'").catch(() => {});
-  await query("UPDATE settings SET value = '10' WHERE key = 'maxOpenPositions'").catch(() => {});
+  await query("UPDATE settings SET value = '4' WHERE key = 'maxOpenPositions'").catch(() => {});
   await query("UPDATE settings SET value = '91' WHERE key = 'minAiScore'").catch(() => {});
+  await query("UPDATE settings SET value = '2.0' WHERE key = 'minRiskRewardRatio'").catch(() => {});
   await query("TRUNCATE TABLE paper_positions CASCADE;").catch(() => {});
 
   logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $1000 balance, all positions cleared');

@@ -33,10 +33,10 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
   }
 
   async function handleResetPortfolio() {
-    if (!confirm('Are you sure you want to reset your Paper Trading Portfolio back to $100.00 USD? All open/closed paper trades will be cleared.')) return;
+    if (!confirm('Are you sure you want to reset your Paper Trading Portfolio back to $1,000.00 USD? All open/closed paper trades will be cleared.')) return;
     setResetting(true);
     try {
-      await api.resetAltcoinPortfolio(settings.startingBalanceUsd || 100);
+      await api.resetAltcoinPortfolio(settings.startingBalanceUsd || 1000);
       window.location.reload();
     } catch {
       // ignore
@@ -58,6 +58,27 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
         </div>
       </div>
 
+      {/* Institutional Strategy Parameters Card */}
+      <div style={{ background: 'rgba(0,255,136,0.03)', border: '1px solid rgba(0,255,136,0.2)', borderRadius: 12, padding: '16px' }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: '#00ff88', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>
+          🏛️ ACTIVE INSTITUTIONAL STRATEGY RULES
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 12px', fontSize: 11 }}>
+          <div style={{ color: '#7090b0' }}>Take Profit Target:</div>
+          <div style={{ color: '#00ff88', fontWeight: 700 }}>3.0× ATR (1 : 2.00 R:R)</div>
+          <div style={{ color: '#7090b0' }}>Stop Loss Buffer:</div>
+          <div style={{ color: '#ff4466', fontWeight: 700 }}>1.5× ATR</div>
+          <div style={{ color: '#7090b0' }}>Directional Cap:</div>
+          <div style={{ color: '#00d4ff', fontWeight: 700 }}>Max 3 Longs or Shorts</div>
+          <div style={{ color: '#7090b0' }}>24h Circuit Breaker:</div>
+          <div style={{ color: '#ffd700', fontWeight: 700 }}>Max 3 SLs / 24h</div>
+          <div style={{ color: '#7090b0' }}>BTC Macro Filter:</div>
+          <div style={{ color: '#00ff88', fontWeight: 700 }}>Active (4H EMA 50/200)</div>
+          <div style={{ color: '#7090b0' }}>Candle Invalidation:</div>
+          <div style={{ color: '#ffffff', fontWeight: 700 }}>Closed 1H Bar EMA 20</div>
+        </div>
+      </div>
+
       {/* Account Balance Section */}
       <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '16px' }}>
         <div style={{ fontSize: 12, fontWeight: 800, color: '#00ff88', letterSpacing: '0.08em', marginBottom: 12, textTransform: 'uppercase' }}>
@@ -69,11 +90,11 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
             <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>STARTING BALANCE (USD)</div>
             <input
               type="number"
-              value={settings.startingBalanceUsd ?? 100}
-              onChange={(e) => update('startingBalanceUsd', parseFloat(e.target.value) || 100)}
+              value={settings.startingBalanceUsd ?? 1000}
+              onChange={(e) => update('startingBalanceUsd', parseFloat(e.target.value) || 1000)}
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
             />
-            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Initial paper capital allocated to account (Default: $100.00 USD).</div>
+            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Initial paper capital allocated to account (Default: $1,000.00 USD).</div>
           </div>
         </div>
       </div>
@@ -89,23 +110,23 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
             <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>MAX RISK PER TRADE (%)</div>
             <input
               type="number"
-              step="0.1"
-              value={settings.riskPerTradePct ?? 1.0}
-              onChange={(e) => update('riskPerTradePct', parseFloat(e.target.value) || 1.0)}
+              step="0.05"
+              value={settings.riskPerTradePct ?? 0.1}
+              onChange={(e) => update('riskPerTradePct', parseFloat(e.target.value) || 0.1)}
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
             />
-            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Max capital lost if Stop Loss is hit (Default: 1.0% = $1.00 USD per trade on $100 account).</div>
+            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Max capital lost if Stop Loss is hit (Default: 0.1% = $1.00 USD per trade on $1,000 account).</div>
           </div>
 
           <div>
             <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>MAX OPEN POSITIONS</div>
             <input
               type="number"
-              value={settings.maxOpenPositions ?? 2}
-              onChange={(e) => update('maxOpenPositions', parseInt(e.target.value, 10) || 2)}
+              value={settings.maxOpenPositions ?? 4}
+              onChange={(e) => update('maxOpenPositions', parseInt(e.target.value, 10) || 4)}
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
             />
-            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Maximum concurrent open positions allowed for quality over quantity (Default: 2).</div>
+            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Maximum concurrent open positions allowed for portfolio diversification (Default: 4).</div>
           </div>
         </div>
       </div>
@@ -121,11 +142,11 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
             <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>MINIMUM AI SCORE FOR ENTRY (0 - 100)</div>
             <input
               type="number"
-              value={settings.minAiScore ?? 88}
-              onChange={(e) => update('minAiScore', parseInt(e.target.value, 10) || 88)}
+              value={settings.minAiScore ?? 91}
+              onChange={(e) => update('minAiScore', parseInt(e.target.value, 10) || 91)}
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
             />
-            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Minimum combined AI score required to trigger ENTRY_READY (Default: 88/100).</div>
+            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Minimum combined AI score required to trigger ENTRY_READY (Default: 91/100).</div>
           </div>
 
           <div>
@@ -217,7 +238,7 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
           ⚠️ RESET PAPER PORTFOLIO
         </div>
         <div style={{ fontSize: 10, color: '#7090b0', marginBottom: 12 }}>
-          Reset your paper trading account back to initial $100.00 USD starting balance.
+          Reset your paper trading account back to initial $1,000.00 USD starting balance.
         </div>
         <button
           onClick={handleResetPortfolio}
@@ -227,7 +248,7 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
             border: '1px solid rgba(255,68,102,0.4)', color: '#ff4466', fontSize: 11, fontWeight: 800, cursor: 'pointer',
           }}
         >
-          {resetting ? 'RESETTING...' : 'RESET PORTFOLIO TO $100.00'}
+          {resetting ? 'RESETTING...' : 'RESET PORTFOLIO TO $1,000.00'}
         </button>
       </div>
     </div>

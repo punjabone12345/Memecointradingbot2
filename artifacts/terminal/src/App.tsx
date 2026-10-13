@@ -12,11 +12,11 @@ type Tab = 'discover' | 'positions' | 'analytics' | 'diagnostics' | 'settings';
 
 const DEFAULT_SETTINGS: Settings = {
   botEnabled: true,
-  startingBalanceUsd: 100,
-  currentBalanceUsd: 100,
-  riskPerTradePct: 1.0,
-  maxOpenPositions: 2,
-  minAiScore: 88,
+  startingBalanceUsd: 1000,
+  currentBalanceUsd: 1000,
+  riskPerTradePct: 0.1,
+  maxOpenPositions: 4,
+  minAiScore: 91,
   minRiskRewardRatio: 2.0,
   universeSize: 100,
   paperTradingOnly: true,
