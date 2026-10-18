@@ -10,20 +10,30 @@ export const pool = new Pool({
 });
 
 export async function query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]> {
-  const client = await pool.connect();
+  let client;
   try {
+    client = await pool.connect();
     const result = await client.query(sql, params);
     return result.rows as T[];
   } catch (err: unknown) {
     const pgErr = err as { code?: string; message?: string };
-    if (pgErr?.code === '53100') {
-      logger.warn({ message: pgErr.message, sql: sql.slice(0, 100) }, 'DB storage quota exceeded (code 53100) - write suppressed');
+    const errMsg = (pgErr?.message || '').toLowerCase();
+    const isQuota = pgErr?.code === '53100' ||
+                    errMsg.includes('quota') ||
+                    errMsg.includes('limit') ||
+                    errMsg.includes('exceeded') ||
+                    errMsg.includes('disabled') ||
+                    errMsg.includes('upgrade');
+    if (isQuota) {
+      logger.warn({ message: pgErr?.message, sql: sql.slice(0, 100) }, 'DB quota limit reached - write/read safely bypassed');
       return [] as T[];
     }
     logger.error({ err, sql }, 'DB query error');
     throw err;
   } finally {
-    client.release();
+    if (client) {
+      try { client.release(); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -35,13 +45,16 @@ export async function query<T = unknown>(sql: string, params?: unknown[]): Promi
  * risked masking real errors (e.g. GMGN API failures) in the same log stream.
  */
 async function queryQuiet(sql: string, params?: any[]): Promise<void> {
-  const client = await pool.connect();
+  let client;
   try {
+    client = await pool.connect();
     await client.query(sql, params);
   } catch {
-    // Expected: legacy table/column may not exist. No-op.
+    // Expected: legacy table/column may not exist or quota hit. No-op.
   } finally {
-    client.release();
+    if (client) {
+      try { client.release(); } catch { /* ignore */ }
+    }
   }
 }
 

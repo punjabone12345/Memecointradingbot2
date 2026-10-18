@@ -61,14 +61,20 @@ export default function App() {
 
   const loadInitial = useCallback(async () => {
     try {
-      const [settingsData, statusData] = await Promise.all([
+      const [settingsRes, statusRes] = await Promise.allSettled([
         api.getSettings(),
         api.getAltcoinStatus(),
       ]);
-      setSettings(settingsData);
-      setAltcoinStatus(statusData);
-      setHttpConnected(true);
+      if (settingsRes.status === 'fulfilled' && settingsRes.value) {
+        setSettings(settingsRes.value);
+      }
+      if (statusRes.status === 'fulfilled' && statusRes.value) {
+        setAltcoinStatus(statusRes.value);
+        setHttpConnected(true);
+      }
     } catch {
+      // ignore
+    } finally {
       retryRef.current = setTimeout(loadInitial, 3000);
     }
   }, []);

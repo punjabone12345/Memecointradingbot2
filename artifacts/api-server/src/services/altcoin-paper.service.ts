@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getSettings, getBalance, adjustBalance, setBalance } from './settings.service.js';
 import { query } from '../lib/db.js';
 import {
@@ -19,12 +22,58 @@ import {
   notifyAltcoinStopMovedToBE
 } from '../lib/telegram.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 let openPositions: PaperPosition[] = [];
 let closedPositions: ClosedPaperPosition[] = [];
 let serverStartMs = Date.now();
 let lastScannerRunMs = Date.now();
 let apiErrorsCount = 0;
 let dbLoaded = false;
+
+function getPositionsBackupPath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'artifacts', 'api-server', 'data', 'paper_positions_backup.json'),
+    path.join(process.cwd(), 'data', 'paper_positions_backup.json'),
+    path.join(__dirname, '..', '..', 'data', 'paper_positions_backup.json'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  const fallback = path.join(process.cwd(), 'artifacts', 'api-server', 'data');
+  try { fs.mkdirSync(fallback, { recursive: true }); } catch { /* ignore */ }
+  return path.join(fallback, 'paper_positions_backup.json');
+}
+
+export function savePositionsToDisk(): void {
+  try {
+    const p = getPositionsBackupPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const payload = JSON.stringify({ open: openPositions, closed: closedPositions }, null, 2);
+    fs.writeFileSync(p, payload);
+  } catch (err) {
+    logger.debug({ err }, 'Could not save positions to disk backup');
+  }
+}
+
+function loadPositionsFromDisk(): boolean {
+  try {
+    const p = getPositionsBackupPath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (parsed && (Array.isArray(parsed.open) || Array.isArray(parsed.closed))) {
+        openPositions = parsed.open || [];
+        closedPositions = parsed.closed || [];
+        logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions from disk backup');
+        return true;
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Could not read positions from disk backup');
+  }
+  return false;
+}
 
 // ── Database Sync: Load persisted positions on server boot ────────────────────
 async function ensurePositionsLoadedFromDb(): Promise<void> {
@@ -34,63 +83,72 @@ async function ensurePositionsLoadedFromDb(): Promise<void> {
       SELECT * FROM paper_positions ORDER BY entry_time DESC
     `);
     
-    const loadedOpen: PaperPosition[] = [];
-    const loadedClosed: ClosedPaperPosition[] = [];
+    if (rows && rows.length > 0) {
+      const loadedOpen: PaperPosition[] = [];
+      const loadedClosed: ClosedPaperPosition[] = [];
 
-    for (const r of rows) {
-      let thesis: string[] = [];
-      try {
-        thesis = typeof r.trade_thesis === 'string' ? JSON.parse(r.trade_thesis) : (r.trade_thesis || []);
-      } catch {
-        thesis = [];
+      for (const r of rows) {
+        let thesis: string[] = [];
+        try {
+          thesis = typeof r.trade_thesis === 'string' ? JSON.parse(r.trade_thesis) : (r.trade_thesis || []);
+        } catch {
+          thesis = [];
+        }
+
+        const base: PaperPosition = {
+          id: r.id,
+          assetId: r.asset_id,
+          symbol: r.symbol,
+          name: r.name,
+          side: r.side === 'SHORT' ? 'SHORT' : 'LONG',
+          entryPrice: parseFloat(r.entry_price),
+          currentPrice: parseFloat(r.current_price || r.entry_price),
+          stopLoss: parseFloat(r.stop_loss),
+          takeProfit: parseFloat(r.take_profit),
+          positionSizeUsd: parseFloat(r.position_size_usd),
+          quantity: parseFloat(r.quantity),
+          riskAmountUsd: parseFloat(r.risk_amount_usd),
+          riskPct: parseFloat(r.risk_pct || '0.1'),
+          unrealizedPnlUsd: parseFloat(r.unrealized_pnl_usd || '0'),
+          unrealizedPnlPct: parseFloat(r.unrealized_pnl_pct || '0'),
+          rMultiple: parseFloat(r.r_multiple || '0'),
+          aiScoreAtEntry: parseInt(r.ai_score_at_entry, 10),
+          setupType: r.setup_type,
+          entryTime: Number(r.entry_time),
+          tradeThesis: thesis
+        };
+
+        if (r.status === 'OPEN') {
+          loadedOpen.push(base);
+        } else {
+          loadedClosed.push({
+            ...base,
+            closeTime: Number(r.close_time || r.entry_time),
+            closePrice: parseFloat(r.exit_price || r.current_price),
+            closeReason: r.close_reason || 'CLOSED',
+            realizedPnlUsd: parseFloat(r.realized_pnl_usd || '0'),
+            realizedPnlPct: parseFloat(r.realized_pnl_pct || '0'),
+            finalR: parseFloat(r.final_r || '0')
+          });
+        }
       }
 
-      const base: PaperPosition = {
-        id: r.id,
-        assetId: r.asset_id,
-        symbol: r.symbol,
-        name: r.name,
-        side: r.side === 'SHORT' ? 'SHORT' : 'LONG',
-        entryPrice: parseFloat(r.entry_price),
-        currentPrice: parseFloat(r.current_price || r.entry_price),
-        stopLoss: parseFloat(r.stop_loss),
-        takeProfit: parseFloat(r.take_profit),
-        positionSizeUsd: parseFloat(r.position_size_usd),
-        quantity: parseFloat(r.quantity),
-        riskAmountUsd: parseFloat(r.risk_amount_usd),
-        riskPct: parseFloat(r.risk_pct || '1.0'),
-        unrealizedPnlUsd: parseFloat(r.unrealized_pnl_usd || '0'),
-        unrealizedPnlPct: parseFloat(r.unrealized_pnl_pct || '0'),
-        rMultiple: parseFloat(r.r_multiple || '0'),
-        aiScoreAtEntry: parseInt(r.ai_score_at_entry, 10),
-        setupType: r.setup_type,
-        entryTime: Number(r.entry_time),
-        tradeThesis: thesis
-      };
-
-      if (r.status === 'OPEN') {
-        loadedOpen.push(base);
-      } else {
-        loadedClosed.push({
-          ...base,
-          closeTime: Number(r.close_time || r.entry_time),
-          closePrice: parseFloat(r.exit_price || r.current_price),
-          closeReason: r.close_reason || 'CLOSED',
-          realizedPnlUsd: parseFloat(r.realized_pnl_usd || '0'),
-          realizedPnlPct: parseFloat(r.realized_pnl_pct || '0'),
-          finalR: parseFloat(r.final_r || '0')
-        });
-      }
+      openPositions = loadedOpen;
+      closedPositions = loadedClosed;
+      dbLoaded = true;
+      savePositionsToDisk();
+      logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions from database');
+      return;
     }
-
-    openPositions = loadedOpen;
-    closedPositions = loadedClosed;
-    dbLoaded = true;
-    logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions from database');
   } catch (err) {
-    logger.warn({ err }, 'Could not load paper positions from database (using in-memory)');
-    dbLoaded = true;
+    logger.warn({ err }, 'Could not load paper positions from database (checking disk backup)');
   }
+
+  // Fallback: If DB had 0 rows or query was suppressed/errored, load from disk backup
+  if (openPositions.length === 0 && closedPositions.length === 0) {
+    loadPositionsFromDisk();
+  }
+  dbLoaded = true;
 }
 
 export function getPaperPositions(): PaperPosition[] {
@@ -122,8 +180,13 @@ export function getLearningMetrics(): LearningMetrics {
 
 export async function getPaperPortfolio(): Promise<PaperPortfolio> {
   await ensurePositionsLoadedFromDb();
-  const settings = await getSettings();
-  const startingBalance = settings.startingBalanceUsd || 100.00;
+  let settings: Settings;
+  try {
+    settings = await getSettings();
+  } catch {
+    settings = { startingBalanceUsd: 1000 } as any;
+  }
+  const startingBalance = settings?.startingBalanceUsd || 1000.00;
 
   let usedMargin = 0;
   let unrealizedPnlUsd = 0;
@@ -405,6 +468,7 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
   };
 
   openPositions.unshift(newPos);
+  savePositionsToDisk();
 
   // Persist to Postgres
   await query(`
@@ -470,6 +534,7 @@ async function closePositionInternal(id: string, closePrice: number, reason: 'TP
   };
 
   closedPositions.unshift(closedPos);
+  savePositionsToDisk();
 
   // Update in DB
   await query(`
@@ -583,6 +648,7 @@ export async function editPaperPosition(id: string, updates: Partial<PaperPositi
       p.unrealizedPnlUsd, p.unrealizedPnlPct, p.rMultiple, id
     ]).catch(err => logger.error({ err }, 'Failed to persist edited open position'));
 
+    savePositionsToDisk();
     return p;
   }
 
@@ -632,6 +698,7 @@ export async function editPaperPosition(id: string, updates: Partial<PaperPositi
       cp.entryTime, cp.closeTime, cp.realizedPnlUsd, cp.realizedPnlPct, cp.finalR, id
     ]).catch(err => logger.error({ err }, 'Failed to persist edited closed position'));
 
+    savePositionsToDisk();
     return cp;
   }
 
@@ -653,6 +720,7 @@ export async function deletePaperPosition(id: string): Promise<boolean> {
       logger.error({ err, id }, 'Failed to delete open paper position from database')
     );
     logger.info({ id, symbol: deleted.symbol }, 'Open paper position deleted, margin released');
+    savePositionsToDisk();
     return true;
   }
 
@@ -663,6 +731,7 @@ export async function deletePaperPosition(id: string): Promise<boolean> {
       logger.error({ err, id }, 'Failed to delete closed paper position from database')
     );
     logger.info({ id, symbol: deleted.symbol, realizedPnlUsd: deleted.realizedPnlUsd }, 'Closed paper position deleted, realized P&L restored');
+    savePositionsToDisk();
     return true;
   }
 
@@ -683,6 +752,7 @@ export async function resetPaperPortfolio(initialBalanceUsd = 1000): Promise<Pap
   await query("UPDATE settings SET value = '2.0' WHERE key = 'minRiskRewardRatio'").catch(() => {});
   await query("TRUNCATE TABLE paper_positions CASCADE;").catch(() => {});
 
+  savePositionsToDisk();
   logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $1000 balance, all positions cleared');
   return getPaperPortfolio();
 }
