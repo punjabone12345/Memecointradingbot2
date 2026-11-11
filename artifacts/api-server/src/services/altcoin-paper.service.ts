@@ -21,6 +21,11 @@ import {
   notifyAltcoinTradeClosed,
   notifyAltcoinStopMovedToBE
 } from '../lib/telegram.js';
+import {
+  replicateEntryToDelta,
+  replicateStopMoveToDelta,
+  replicateCloseToDelta
+} from './delta-exchange.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,36 +62,34 @@ export function savePositionsToDisk(): void {
   }
 }
 
-function loadPositionsFromDisk(): boolean {
+function readPositionsFromDisk(): { open: PaperPosition[]; closed: ClosedPaperPosition[] } | null {
   try {
     const p = getPositionsBackupPath();
     if (fs.existsSync(p)) {
       const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
       if (parsed && (Array.isArray(parsed.open) || Array.isArray(parsed.closed))) {
-        openPositions = parsed.open || [];
-        closedPositions = parsed.closed || [];
-        logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions from disk backup');
-        return true;
+        return { open: parsed.open || [], closed: parsed.closed || [] };
       }
     }
   } catch (err) {
     logger.warn({ err }, 'Could not read positions from disk backup');
   }
-  return false;
+  return null;
 }
 
 // ── Database Sync: Load persisted positions on server boot ────────────────────
 async function ensurePositionsLoadedFromDb(): Promise<void> {
   if (dbLoaded) return;
+  const diskData = readPositionsFromDisk();
+  const dbOpen: PaperPosition[] = [];
+  const dbClosed: ClosedPaperPosition[] = [];
+
   try {
     const rows = await query<any>(`
       SELECT * FROM paper_positions ORDER BY entry_time DESC
     `);
-    
-    if (rows && rows.length > 0) {
-      const loadedOpen: PaperPosition[] = [];
-      const loadedClosed: ClosedPaperPosition[] = [];
 
+    if (rows && rows.length > 0) {
       for (const r of rows) {
         let thesis: string[] = [];
         try {
@@ -119,9 +122,9 @@ async function ensurePositionsLoadedFromDb(): Promise<void> {
         };
 
         if (r.status === 'OPEN') {
-          loadedOpen.push(base);
+          dbOpen.push(base);
         } else {
-          loadedClosed.push({
+          dbClosed.push({
             ...base,
             closeTime: Number(r.close_time || r.entry_time),
             closePrice: parseFloat(r.exit_price || r.current_price),
@@ -132,23 +135,31 @@ async function ensurePositionsLoadedFromDb(): Promise<void> {
           });
         }
       }
-
-      openPositions = loadedOpen;
-      closedPositions = loadedClosed;
-      dbLoaded = true;
-      savePositionsToDisk();
-      logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions from database');
-      return;
     }
   } catch (err) {
-    logger.warn({ err }, 'Could not load paper positions from database (checking disk backup)');
+    logger.warn({ err }, 'Could not load paper positions from database (using disk backup)');
   }
 
-  // Fallback: If DB had 0 rows or query was suppressed/errored, load from disk backup
-  if (openPositions.length === 0 && closedPositions.length === 0) {
-    loadPositionsFromDisk();
+  // Merge DB + disk backup by id so neither partial DB rows nor disk snapshots lose trades
+  const closedById = new Map<string, ClosedPaperPosition>();
+  for (const cp of diskData?.closed || []) closedById.set(cp.id, cp);
+  for (const cp of dbClosed) closedById.set(cp.id, cp);
+
+  const openById = new Map<string, PaperPosition>();
+  for (const op of diskData?.open || []) {
+    if (!closedById.has(op.id)) openById.set(op.id, op);
   }
+  for (const op of dbOpen) {
+    if (!closedById.has(op.id)) openById.set(op.id, op);
+  }
+
+  openPositions = Array.from(openById.values()).sort((a, b) => b.entryTime - a.entryTime);
+  closedPositions = Array.from(closedById.values()).sort((a, b) => (b.closeTime || b.entryTime) - (a.closeTime || a.entryTime));
   dbLoaded = true;
+  if (openPositions.length > 0 || closedPositions.length > 0) {
+    savePositionsToDisk();
+  }
+  logger.info({ open: openPositions.length, closed: closedPositions.length }, 'Loaded paper positions (DB + backup merged)');
 }
 
 export function getPaperPositions(): PaperPosition[] {
@@ -306,6 +317,7 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
         if (pos.stopLoss === pos.entryPrice) {
           notifyAltcoinStopMovedToBE({ symbol: pos.symbol, side: pos.side, rMultiple: pos.rMultiple }).catch(() => {});
         }
+        void replicateStopMoveToDelta(pos).catch(() => {});
       }
 
       // Sync live unrealized metrics & updated ratcheted stop to DB
@@ -488,6 +500,9 @@ async function executePaperEntry(sig: AltcoinSignal, settings: Settings): Promis
 
   logger.info({ symbol: newPos.symbol, side: newPos.side, size: newPos.positionSizeUsd, entry: newPos.entryPrice, riskPct }, 'Paper Position Opened');
 
+  // Trigger Delta Exchange Trade Replication (non-fatal if disabled or unconfigured)
+  void replicateEntryToDelta(newPos).catch(err => logger.warn({ err }, 'Delta entry replication hook error'));
+
   // Trigger Telegram Alert
   notifyAltcoinTradeEntered({
     symbol: newPos.symbol,
@@ -548,6 +563,9 @@ async function closePositionInternal(id: string, closePrice: number, reason: 'TP
   ]).catch(err => logger.error({ err }, 'Failed to update closed position in DB'));
 
   logger.info({ symbol: pos.symbol, side: pos.side, reason, pnl: realizedPnlUsd, r: finalR }, 'Paper Position Closed');
+
+  // Replicate exit / bracket cleanup to Delta Exchange (non-fatal)
+  void replicateCloseToDelta(closedPos).catch(err => logger.warn({ err }, 'Delta close replication hook error'));
 
   // Trigger Telegram Alerts based on outcome
   const portfolio = await getPaperPortfolio();

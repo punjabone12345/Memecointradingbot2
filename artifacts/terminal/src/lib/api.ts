@@ -86,6 +86,23 @@ export const api = {
     apiFetch<{ success: boolean; error?: string }>('/altcoin/telegram/test', {
       method: 'POST',
     }),
+  testDelta: (payload?: {
+    deltaEnvironment?: string;
+    deltaApiKey?: string;
+    deltaApiSecret?: string;
+  }) =>
+    apiFetch<{
+      success: boolean;
+      environment: string;
+      baseUrl: string;
+      balances?: Array<{ asset: string; balance: string; available: string }>;
+      livePerpsCount?: number;
+      supportedSample?: string[];
+      error?: string;
+    }>('/altcoin/delta/test', {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {}),
+    }),
 
   // ── Legacy Sniper compatibility ──────────────────────────────────────────────
   getSniperStatus: () => apiFetch<AltcoinStatusResponse>('/sniper/status'),

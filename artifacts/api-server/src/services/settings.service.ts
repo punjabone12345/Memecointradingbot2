@@ -138,6 +138,14 @@ export async function getSettings(): Promise<Settings> {
         minLiquidity: num('minLiquidity', 15000),
         minMc: num('minMc', 30000),
         sustainDurationSec: num('sustainDurationSec', 600),
+        telegramBotToken: map['telegramBotToken'] ?? '',
+        telegramChatId: map['telegramChatId'] ?? '',
+        deltaEnabled: bool('deltaEnabled', false),
+        deltaEnvironment: (map['deltaEnvironment'] as Settings['deltaEnvironment']) || 'INDIA_DEMO',
+        deltaApiKey: map['deltaApiKey'] ?? '',
+        deltaApiSecret: map['deltaApiSecret'] ?? '',
+        deltaRiskScale: num('deltaRiskScale', 1.0),
+        deltaLeverage: num('deltaLeverage', 10),
       };
 
       settingsCache = settings;
@@ -152,7 +160,21 @@ export async function getSettings(): Promise<Settings> {
   // Fallback 1: Disk backup
   const disk = loadSettingsFromDisk();
   if (disk) {
-    settingsCache = { ...disk, botEnabled: disk.botEnabled ?? true, startingBalanceUsd: disk.startingBalanceUsd || 1000, riskPerTradePct: disk.riskPerTradePct || 0.1, maxOpenPositions: disk.maxOpenPositions || 4, minAiScore: disk.minAiScore || 91, minRiskRewardRatio: disk.minRiskRewardRatio || 2.0 };
+    settingsCache = {
+      ...disk,
+      botEnabled: disk.botEnabled ?? true,
+      startingBalanceUsd: disk.startingBalanceUsd || 1000,
+      riskPerTradePct: disk.riskPerTradePct || 0.1,
+      maxOpenPositions: disk.maxOpenPositions || 4,
+      minAiScore: disk.minAiScore || 91,
+      minRiskRewardRatio: disk.minRiskRewardRatio || 2.0,
+      deltaEnabled: disk.deltaEnabled ?? false,
+      deltaEnvironment: disk.deltaEnvironment || 'INDIA_DEMO',
+      deltaApiKey: disk.deltaApiKey ?? '',
+      deltaApiSecret: disk.deltaApiSecret ?? '',
+      deltaRiskScale: disk.deltaRiskScale ?? 1.0,
+      deltaLeverage: disk.deltaLeverage ?? 10,
+    };
     settingsCacheAt = Date.now();
     return settingsCache;
   }
@@ -220,6 +242,14 @@ export async function getSettings(): Promise<Settings> {
     minLiquidity: 15000,
     minMc: 30000,
     sustainDurationSec: 600,
+    telegramBotToken: '',
+    telegramChatId: '',
+    deltaEnabled: false,
+    deltaEnvironment: 'INDIA_DEMO',
+    deltaApiKey: '',
+    deltaApiSecret: '',
+    deltaRiskScale: 1.0,
+    deltaLeverage: 10,
   };
 
   settingsCache = fallbackSettings;
@@ -228,10 +258,31 @@ export async function getSettings(): Promise<Settings> {
   return fallbackSettings;
 }
 
+const STRING_SETTING_KEYS = new Set([
+  'tradingWindowStart',
+  'tradingWindowEnd',
+  'rpcEndpoint',
+  'walletPublicKey',
+  'telegramBotToken',
+  'telegramChatId',
+  'deltaEnvironment',
+  'deltaApiKey',
+  'deltaApiSecret',
+]);
+
 export async function updateSetting(key: string, value: string): Promise<void> {
-  if (settingsCache) {
-    (settingsCache as any)[key] = value === 'true' ? true : value === 'false' ? false : !isNaN(Number(value)) ? Number(value) : value;
-    saveSettingsToDisk(settingsCache);
+  const target = settingsCache ?? loadSettingsFromDisk();
+  if (target) {
+    if (STRING_SETTING_KEYS.has(key)) {
+      (target as any)[key] = value;
+    } else if (value === 'true' || value === 'false') {
+      (target as any)[key] = value === 'true';
+    } else if (value.trim() !== '' && !isNaN(Number(value))) {
+      (target as any)[key] = Number(value);
+    } else {
+      (target as any)[key] = value;
+    }
+    saveSettingsToDisk(target);
   }
   await query(
     `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())

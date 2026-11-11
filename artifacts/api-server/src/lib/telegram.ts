@@ -420,7 +420,7 @@ export async function testTelegramNotification(): Promise<{ success: boolean; er
     return { success: false, error: 'Telegram bot token or chat ID is missing. Set them in settings or environment variables.' };
   }
   try {
-    const text = `ðŸ¤– <b>Altcoin Trading Bot: Telegram Alerts Activated!</b>\n` +
+    const text = `🤖 <b>Altcoin Trading Bot: Telegram Alerts Activated!</b>\n` +
       `Platform: AI-Assisted Intraday Paper Trading & Scanner\n` +
       `Time: ${toIST(new Date())}\n` +
       `Real-time trade entries, take profits, stop losses, and exits will be broadcast here.`;
@@ -433,6 +433,14 @@ export async function testTelegramNotification(): Promise<{ success: boolean; er
   } catch (err: any) {
     return { success: false, error: err?.response?.data?.description || err?.message || 'Telegram API request failed' };
   }
+}
+
+export async function notifyDeltaReplication(title: string, details: string): Promise<void> {
+  await sendMessage(
+    `🔗 <b>DELTA EXCHANGE — ${title}</b>\n` +
+    `${details}\n` +
+    `<b>Time:</b> ${toIST(new Date())}`
+  );
 }
 
 

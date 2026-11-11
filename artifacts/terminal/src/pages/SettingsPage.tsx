@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings } from '../lib/types.js';
 import { api } from '../lib/api.js';
 
@@ -9,11 +9,22 @@ interface Props {
 
 export default function SettingsPage({ settings: init, onUpdate }: Props) {
   const [settings, setSettings] = useState(init);
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [testingDelta, setTestingDelta] = useState(false);
+  const [deltaTestResult, setDeltaTestResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!dirty) setSettings(init);
+  }, [init, dirty]);
 
   function update(key: keyof Settings, value: unknown) {
+    setDirty(true);
     const updated = { ...settings, [key]: value };
     setSettings(updated);
   }
@@ -22,11 +33,12 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
     setSaving(true);
     try {
       const updated = await api.updateSettings(settings);
+      setDirty(false);
       onUpdate(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
-      // ignore
+      alert('❌ Failed to save settings. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -159,6 +171,151 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
             />
             <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>Minimum required reward vs risk ratio (Default: 2.0 : 1).</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Delta Exchange Trade Replicator Section */}
+      <div style={{ background: 'rgba(255,215,0,0.03)', border: '1px solid rgba(255,215,0,0.25)', borderRadius: 12, padding: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#ffd700', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            🔗 DELTA EXCHANGE REPLICATOR (DEMO / LIVE)
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11, fontWeight: 800, color: settings.deltaEnabled ? '#00ff88' : '#7090b0' }}>
+            <input
+              type="checkbox"
+              checked={Boolean(settings.deltaEnabled)}
+              onChange={(e) => update('deltaEnabled', e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: '#00ff88', cursor: 'pointer' }}
+            />
+            {settings.deltaEnabled ? 'ENABLED' : 'DISABLED'}
+          </label>
+        </div>
+
+        <div style={{ fontSize: 10, color: '#7090b0', marginBottom: 12, lineHeight: 1.45 }}>
+          Mirrors every paper bot trade (Entry, Bracket SL/TP, +1.5R Break-Even move, and Close) directly into your Delta Exchange account. Your paper strategy remains 100% unchanged.
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>DELTA ENVIRONMENT</div>
+            <select
+              value={settings.deltaEnvironment ?? 'INDIA_DEMO'}
+              onChange={(e) => update('deltaEnvironment', e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+            >
+              <option value="INDIA_DEMO">Delta India DEMO / Testnet (cdn-ind.testnet.deltaex.org)</option>
+              <option value="GLOBAL_DEMO">Delta Global DEMO / Testnet (testnet-api.delta.exchange)</option>
+              <option value="INDIA_LIVE">Delta India LIVE (api.india.delta.exchange)</option>
+              <option value="GLOBAL_LIVE">Delta Global LIVE (api.delta.exchange)</option>
+            </select>
+            <div style={{ fontSize: 10, color: '#4a6080', marginTop: 2 }}>
+              Use India DEMO for demo.delta.exchange accounts. Note: Testnet lists major pairs (BTC, ETH, SOL, XRP, ADA, DOGE); non-listed testnet alts are safely skipped.
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>DELTA API KEY</div>
+            <input
+              type="text"
+              placeholder="Paste your Delta Testnet / Live API Key"
+              value={settings.deltaApiKey ?? ''}
+              onChange={(e) => update('deltaApiKey', e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+            />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>DELTA API SECRET</div>
+            <input
+              type="password"
+              placeholder="Paste your Delta Testnet / Live API Secret"
+              value={settings.deltaApiSecret ?? ''}
+              onChange={(e) => update('deltaApiSecret', e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>SIZE SCALE (MULTIPLIER)</div>
+              <input
+                type="number"
+                step="0.5"
+                min="0.1"
+                value={settings.deltaRiskScale ?? 1.0}
+                onChange={(e) => update('deltaRiskScale', parseFloat(e.target.value) || 1.0)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+              />
+              <div style={{ fontSize: 9.5, color: '#4a6080', marginTop: 2 }}>1.0 = exact $1k bot size; use 10.0 for $10k demo account.</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>ORDER LEVERAGE (×)</div>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={settings.deltaLeverage ?? 10}
+                onChange={(e) => update('deltaLeverage', parseInt(e.target.value, 10) || 10)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+              />
+              <div style={{ fontSize: 9.5, color: '#4a6080', marginTop: 2 }}>Margin leverage applied per contract (Default: 10x).</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
+            <button
+              type="button"
+              disabled={testingDelta}
+              onClick={async () => {
+                setTestingDelta(true);
+                setDeltaTestResult(null);
+                try {
+                  const res = await api.testDelta({
+                    deltaEnvironment: settings.deltaEnvironment ?? 'INDIA_DEMO',
+                    deltaApiKey: settings.deltaApiKey ?? '',
+                    deltaApiSecret: settings.deltaApiSecret ?? '',
+                  });
+                  if (res.success) {
+                    const balStr = (res.balances || []).map(b => `${b.asset}: ${Number(b.available).toFixed(2)}`).join(' | ') || '0 USD';
+                    setDeltaTestResult({
+                      success: true,
+                      message: `Connected to ${res.environment}! Balance: ${balStr}. Live perpetuals: ${res.livePerpsCount}. Remember to click SAVE SETTINGS below!`,
+                    });
+                  } else {
+                    setDeltaTestResult({
+                      success: false,
+                      message: `Connection failed: ${res.error || 'Unknown error'}`,
+                    });
+                  }
+                } catch (e: any) {
+                  setDeltaTestResult({
+                    success: false,
+                    message: `Error: ${e?.message || 'Request failed'}`,
+                  });
+                } finally {
+                  setTestingDelta(false);
+                }
+              }}
+              style={{
+                padding: '9px 14px', borderRadius: 7, background: 'rgba(255,215,0,0.15)',
+                border: '1px solid rgba(255,215,0,0.35)', color: '#ffd700', fontSize: 11, fontWeight: 800, cursor: 'pointer', alignSelf: 'flex-start',
+              }}
+            >
+              {testingDelta ? '⏳ Testing Delta API...' : '🔌 Test Delta Connection & Balance'}
+            </button>
+
+            {deltaTestResult && (
+              <div style={{
+                padding: '8px 10px', borderRadius: 7, fontSize: 10.5, fontWeight: 700,
+                background: deltaTestResult.success ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,102,0.1)',
+                border: `1px solid ${deltaTestResult.success ? 'rgba(0,255,136,0.3)' : 'rgba(255,68,102,0.3)'}`,
+                color: deltaTestResult.success ? '#00ff88' : '#ff4466',
+              }}>
+                {deltaTestResult.message}
+              </div>
+            )}
           </div>
         </div>
       </div>

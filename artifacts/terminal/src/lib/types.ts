@@ -38,6 +38,14 @@ export interface Settings {
   minLiquidity?: number;
   minMc?: number;
   sustainDurationSec?: number;
+
+  // Delta Exchange Trade Replicator (Demo / Live)
+  deltaEnabled?: boolean;
+  deltaEnvironment?: 'INDIA_DEMO' | 'GLOBAL_DEMO' | 'INDIA_LIVE' | 'GLOBAL_LIVE';
+  deltaApiKey?: string;
+  deltaApiSecret?: string;
+  deltaRiskScale?: number;
+  deltaLeverage?: number;
   [key: string]: any;
 }
 

@@ -11,6 +11,7 @@ import {
   getLearningMetrics,
 } from '../services/altcoin-paper.service.js';
 import { testTelegramNotification } from '../lib/telegram.js';
+import { testDeltaConnection } from '../services/delta-exchange.service.js';
 
 const router = Router();
 
@@ -106,6 +107,17 @@ router.post('/telegram/test', async (_req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to send test message' });
+  }
+});
+
+/** POST /api/altcoin/delta/test - Test Delta Exchange Demo/Live API connection */
+router.post('/delta/test', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : undefined;
+    const result = await testDeltaConnection(body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Delta connection test failed' });
   }
 });
 
