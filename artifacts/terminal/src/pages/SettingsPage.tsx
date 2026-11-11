@@ -264,6 +264,21 @@ export default function SettingsPage({ settings: init, onUpdate }: Props) {
             </div>
           </div>
 
+          <div>
+            <div style={{ fontSize: 11, color: '#7090b0', fontWeight: 700, marginBottom: 4 }}>MAX RISK PER DELTA ORDER ($ USD, 0 = UNLIMITED)</div>
+            <input
+              type="number"
+              step="0.25"
+              min="0"
+              value={settings.deltaMaxRiskUsd ?? 0}
+              onChange={(e) => update('deltaMaxRiskUsd', parseFloat(e.target.value) || 0)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: '#0a101d', border: '1px solid rgba(255,255,255,0.1)', color: '#ffffff', fontSize: 13, fontWeight: 700 }}
+            />
+            <div style={{ fontSize: 9.5, color: '#4a6080', marginTop: 2 }}>
+              Small account protection: skips pairs whose minimum 1 contract risks more than this $ amount (recommended: $1.25 for a $50 real account).
+            </div>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
             <button
               type="button"

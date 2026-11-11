@@ -146,6 +146,7 @@ export async function getSettings(): Promise<Settings> {
         deltaApiSecret: map['deltaApiSecret'] ?? '',
         deltaRiskScale: num('deltaRiskScale', 1.0),
         deltaLeverage: num('deltaLeverage', 10),
+        deltaMaxRiskUsd: num('deltaMaxRiskUsd', 0),
       };
 
       settingsCache = settings;
@@ -174,6 +175,7 @@ export async function getSettings(): Promise<Settings> {
       deltaApiSecret: disk.deltaApiSecret ?? '',
       deltaRiskScale: disk.deltaRiskScale ?? 1.0,
       deltaLeverage: disk.deltaLeverage ?? 10,
+      deltaMaxRiskUsd: disk.deltaMaxRiskUsd ?? 0,
     };
     settingsCacheAt = Date.now();
     return settingsCache;
@@ -250,6 +252,7 @@ export async function getSettings(): Promise<Settings> {
     deltaApiSecret: '',
     deltaRiskScale: 1.0,
     deltaLeverage: 10,
+    deltaMaxRiskUsd: 0,
   };
 
   settingsCache = fallbackSettings;

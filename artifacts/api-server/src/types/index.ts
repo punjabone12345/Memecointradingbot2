@@ -70,6 +70,7 @@ export interface Settings {
   deltaApiSecret?: string;
   deltaRiskScale?: number;
   deltaLeverage?: number;
+  deltaMaxRiskUsd?: number;
   [key: string]: any;
 }
 

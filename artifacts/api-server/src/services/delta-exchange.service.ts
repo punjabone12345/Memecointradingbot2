@@ -115,6 +115,7 @@ interface DeltaConfig {
   apiSecret: string;
   riskScale: number;
   leverage: number;
+  maxRiskUsd: number;
 }
 
 async function resolveDeltaConfig(override?: Partial<Settings>): Promise<DeltaConfig> {
@@ -126,6 +127,7 @@ async function resolveDeltaConfig(override?: Partial<Settings>): Promise<DeltaCo
   const enabled = Boolean(override?.deltaEnabled ?? s.deltaEnabled ?? (process.env.DELTA_ENABLED === 'true'));
   const riskScale = Number(override?.deltaRiskScale ?? s.deltaRiskScale ?? 1.0) || 1.0;
   const leverage = Math.max(1, Math.min(100, Math.round(Number(override?.deltaLeverage ?? s.deltaLeverage ?? 10) || 10)));
+  const maxRiskUsd = Math.max(0, Number(override?.deltaMaxRiskUsd ?? s.deltaMaxRiskUsd ?? process.env.DELTA_MAX_RISK_USD ?? 0) || 0);
 
   return {
     enabled,
@@ -135,6 +137,7 @@ async function resolveDeltaConfig(override?: Partial<Settings>): Promise<DeltaCo
     apiSecret,
     riskScale,
     leverage,
+    maxRiskUsd,
   };
 }
 
@@ -337,6 +340,16 @@ export async function replicateEntryToDelta(pos: PaperPosition): Promise<void> {
     const contractValue = parseFloat(product.contract_value) || 1;
     const rawContracts = (pos.quantity * cfg.riskScale) / (contractValue * priceMultiplier);
     const contracts = Math.max(1, Math.round(rawContracts));
+
+    const actualRiskUsd = contracts * contractValue * priceMultiplier * Math.abs(pos.entryPrice - pos.stopLoss);
+    if (cfg.maxRiskUsd > 0 && actualRiskUsd > cfg.maxRiskUsd) {
+      logger.info({ symbol: product.symbol, contracts, actualRiskUsd: actualRiskUsd.toFixed(2), maxRiskUsd: cfg.maxRiskUsd }, 'Delta replication skipped: minimum contract risk exceeds deltaMaxRiskUsd cap');
+      void notifyDeltaReplication(
+        `SKIPPED ${product.symbol} (RISK CAP)`,
+        `Min ${contracts} contract risks <b>$${actualRiskUsd.toFixed(2)}</b> (above your <b>$${cfg.maxRiskUsd.toFixed(2)}</b> cap). Paper trade active.`
+      ).catch(() => {});
+      return;
+    }
 
     // Align leverage before entry (best-effort)
     await deltaRequest(
