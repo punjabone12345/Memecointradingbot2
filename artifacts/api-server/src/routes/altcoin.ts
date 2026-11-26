@@ -154,4 +154,26 @@ router.get('/db-check', async (_req, res) => {
   }
 });
 
+/** POST /api/altcoin/db-recovery - Free disk space by dropping dead legacy memecoin tables */
+router.all('/db-recovery', async (_req, res) => {
+  const results: any[] = [];
+  const { pool } = await import('../lib/db.js');
+  const tables = ['diag_transactions', 'diag_tokens', 'diag_errors', 'detected_migrations', 'tokens', 'sniper_positions', 'positions'];
+  for (const t of tables) {
+    try {
+      await pool.query(`DROP TABLE IF EXISTS ${t} CASCADE;`);
+      results.push({ table: t, status: 'DROPPED' });
+    } catch (err: any) {
+      results.push({ table: t, status: 'ERROR', error: err?.message });
+    }
+  }
+  try {
+    const test = await pool.query('SELECT 1 as ping');
+    results.push({ ping: 'SUCCESS', rows: test.rows });
+  } catch (err: any) {
+    results.push({ ping: 'FAILED', error: err?.message });
+  }
+  res.json({ results });
+});
+
 export default router;

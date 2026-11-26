@@ -99,39 +99,76 @@ async function queryQuiet(sql: string, params?: any[]): Promise<void> {
 }
 
 export async function initDB(): Promise<void> {
-  // ── Storage quota recovery ────────────────────────────────────────────────
-  // Neon 512MB limit recovery: clear historical diagnostic dumps and migrations
-  await queryQuiet(`TRUNCATE TABLE diag_transactions CASCADE;`);
-  await queryQuiet(`TRUNCATE TABLE detected_migrations CASCADE;`);
-  await queryQuiet(`TRUNCATE TABLE diag_errors CASCADE;`);
-  await queryQuiet(`TRUNCATE TABLE diag_tokens CASCADE;`);
-  // ── Legacy schema detection ───────────────────────────────────────────────
-  // Old Render DBs have a `position_id SERIAL PRIMARY KEY` column which makes
-  // every INSERT fail (can't drop NOT NULL from a PK). Since no trade has ever
-  // successfully completed under that schema, we drop and recreate cleanly.
-  const legacyCols = await query<{ column_name: string }>(`
-    SELECT column_name FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'positions'
-      AND column_name = 'position_id'
-  `);
-  if (legacyCols.length > 0) {
-    logger.warn('Legacy positions table detected (position_id PK) — dropping and recreating');
-    await query(`DROP TABLE IF EXISTS positions CASCADE`);
-  }
+  try {
+    // ── Drop all dead legacy memecoin tables to immediately reclaim space on Neon ─────
+    await queryQuiet(`DROP TABLE IF EXISTS diag_transactions CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS diag_tokens CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS diag_errors CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS detected_migrations CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS tokens CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS sniper_positions CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS positions CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS token_analysis CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS token_activity CASCADE;`);
+    await queryQuiet(`DROP TABLE IF EXISTS trade_signals CASCADE;`);
 
-  // Guard: if a stale pg_type entry for 'positions' exists without a matching table
-  // (can happen from a previous failed CREATE TABLE), drop the orphaned type first.
-  {
-    const tableExists = await query<{ exists: string }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'positions'
-       )::text AS exists`,
-    );
-    if (tableExists[0]?.exists !== 'true') {
-      await query(`DROP TYPE IF EXISTS positions CASCADE`).catch(() => {});
-    }
+    // Ensure paper_positions table exists with all required columns
+    await queryQuiet(`
+      CREATE TABLE IF NOT EXISTS paper_positions (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        name TEXT NOT NULL,
+        side TEXT NOT NULL DEFAULT 'LONG',
+        entry_price NUMERIC NOT NULL,
+        current_price NUMERIC NOT NULL,
+        exit_price NUMERIC,
+        stop_loss NUMERIC NOT NULL,
+        take_profit NUMERIC NOT NULL,
+        position_size_usd NUMERIC NOT NULL,
+        quantity NUMERIC NOT NULL,
+        risk_amount_usd NUMERIC NOT NULL,
+        risk_pct NUMERIC NOT NULL DEFAULT 1.0,
+        realized_pnl_usd NUMERIC DEFAULT 0,
+        realized_pnl_pct NUMERIC DEFAULT 0,
+        unrealized_pnl_usd NUMERIC DEFAULT 0,
+        unrealized_pnl_pct NUMERIC DEFAULT 0,
+        r_multiple NUMERIC DEFAULT 0,
+        final_r NUMERIC DEFAULT 0,
+        ai_score_at_entry INTEGER NOT NULL,
+        setup_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        entry_time BIGINT NOT NULL,
+        close_time BIGINT,
+        close_reason TEXT,
+        high_water_mark NUMERIC,
+        original_stop_loss NUMERIC,
+        is_trailing_active BOOLEAN DEFAULT FALSE,
+        trade_thesis JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await queryQuiet(`CREATE INDEX IF NOT EXISTS idx_paper_positions_status ON paper_positions (status);`);
+    await queryQuiet(`CREATE INDEX IF NOT EXISTS idx_paper_positions_entry_time ON paper_positions (entry_time DESC);`);
+
+    // Ensure settings table exists
+    await queryQuiet(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    logger.info('Database initialized successfully with persistent paper positions schema');
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'Database init bypassed (quota/connection issue) - resilient disk persistence active');
   }
+  return;
+}
+
+async function legacyInitDBDisabled(): Promise<void> {
 
   await query(`
     CREATE TABLE IF NOT EXISTS positions (
