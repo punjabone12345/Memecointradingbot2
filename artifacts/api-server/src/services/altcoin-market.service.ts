@@ -377,9 +377,10 @@ async function computeRealSignal(
         const rsiHistory = [rsi1h[idx1h], rsi1h[idx1h - 1], rsi1h[idx1h - 2], rsi1h[idx1h - 3]];
         const hadRsiPullback = rsiHistory.some(r => r >= 30 && r <= 48);
 
-        // Reversal confirmation: closed candle crossed back above 20-EMA, green candle, with volume
-        const crossedAboveEma20 = lastClosed.close > ema20_1h[idx1h] && prevClosed.close <= ema20_1h[idx1h - 1];
-        const isGreenCandle = lastClosed.close > lastClosed.open;
+        // Reversal confirmation: 1H candle crossed back above 20-EMA within last 2 completed bars, green candle, with volume
+        const crossedAboveEma20 = (lastClosed.close > ema20_1h[idx1h] && prevClosed.close <= ema20_1h[idx1h - 1]) ||
+                                  (prevClosed.close > ema20_1h[idx1h - 1] && (klines1h[idx1h - 2]?.close || 0) <= ema20_1h[idx1h - 2]);
+        const isGreenCandle = lastClosed.close > lastClosed.open && lastClosed.close > ema20_1h[idx1h];
 
         if (hadRsiPullback && crossedAboveEma20 && isGreenCandle && isVolumeValid && isLiquid) {
           setupType = 'PULLBACK';
@@ -394,7 +395,7 @@ async function computeRealSignal(
           missingCondition = 'Waiting for 1H RSI to pull back into value zone (30-48). Current RSI: ' + rsi1h[idx1h].toFixed(1);
           aiScore = 65;
         } else if (!crossedAboveEma20 || !isGreenCandle) {
-          missingCondition = 'Waiting for 1H candle to close GREEN back above 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ').';
+          missingCondition = 'Macro Bullish (4H). In pullback below 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + '). Waiting for 1H candle to close GREEN above 20-EMA.';
           aiScore = 70;
         } else {
           missingCondition = 'Waiting for volume breakout confirmation.';
@@ -408,8 +409,10 @@ async function computeRealSignal(
         const rsiHistory = [rsi1h[idx1h], rsi1h[idx1h - 1], rsi1h[idx1h - 2], rsi1h[idx1h - 3]];
         const hadRsiRally = rsiHistory.some(r => r >= 52 && r <= 70);
 
-        const crossedBelowEma20 = lastClosed.close < ema20_1h[idx1h] && prevClosed.close >= ema20_1h[idx1h - 1];
-        const isRedCandle = lastClosed.close < lastClosed.open;
+        // Reversal confirmation: 1H candle crossed back below 20-EMA within last 2 completed bars, red candle, with volume
+        const crossedBelowEma20 = (lastClosed.close < ema20_1h[idx1h] && prevClosed.close >= ema20_1h[idx1h - 1]) ||
+                                  (prevClosed.close < ema20_1h[idx1h - 1] && (klines1h[idx1h - 2]?.close || 0) >= ema20_1h[idx1h - 2]);
+        const isRedCandle = lastClosed.close < lastClosed.open && lastClosed.close < ema20_1h[idx1h];
 
         if (hadRsiRally && crossedBelowEma20 && isRedCandle && isVolumeValid && isLiquid) {
           setupType = 'PULLBACK';
@@ -424,7 +427,7 @@ async function computeRealSignal(
           missingCondition = 'Waiting for 1H RSI to rally into premium zone (52-70). Current RSI: ' + rsi1h[idx1h].toFixed(1);
           aiScore = 65;
         } else if (!crossedBelowEma20 || !isRedCandle) {
-          missingCondition = 'Waiting for 1H candle to close RED back below 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + ').';
+          missingCondition = 'Macro Bearish (4H). In relief bounce above 20-EMA ($' + ema20_1h[idx1h].toFixed(price < 1 ? 4 : 2) + '). Waiting for 1H candle to close RED back below 20-EMA.';
           aiScore = 70;
         } else {
           missingCondition = 'Waiting for volume breakdown confirmation.';

@@ -73,6 +73,17 @@ export const api = {
     }),
   getAltcoinLearning: () => apiFetch<LearningMetrics>('/altcoin/learning'),
   getAltcoinHealth: () => apiFetch<SystemHealth>('/altcoin/health'),
+  getDbCheck: () =>
+    apiFetch<{
+      healthy: boolean;
+      latencyMs: number;
+      dbOpenCount: number;
+      dbClosedCount: number;
+      memoryOpenCount: number;
+      memoryClosedCount: number;
+      diskBackupExists: boolean;
+      error?: string;
+    }>('/altcoin/db-check'),
   editPaperPosition: (id: string, updates: Partial<PaperPosition & ClosedPaperPosition>) =>
     apiFetch<{ success: boolean; position: PaperPosition | ClosedPaperPosition; portfolio?: PaperPortfolio }>(`/altcoin/positions/${id}`, {
       method: 'PATCH',

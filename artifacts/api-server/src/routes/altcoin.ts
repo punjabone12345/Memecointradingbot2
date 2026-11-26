@@ -9,6 +9,7 @@ import {
   deletePaperPosition,
   resetPaperPortfolio,
   getLearningMetrics,
+  getDatabaseDiagnostics,
 } from '../services/altcoin-paper.service.js';
 import { testTelegramNotification } from '../lib/telegram.js';
 import { testDeltaConnection } from '../services/delta-exchange.service.js';
@@ -140,6 +141,16 @@ router.get('/health', async (_req, res) => {
     res.json(status.health);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to fetch health' });
+  }
+});
+
+/** GET /api/altcoin/db-check - Deep database health, ping & persistence diagnostic */
+router.get('/db-check', async (_req, res) => {
+  try {
+    const diag = await getDatabaseDiagnostics();
+    res.json(diag);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to check database' });
   }
 });
 

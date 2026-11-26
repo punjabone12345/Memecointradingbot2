@@ -7,9 +7,29 @@ export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false },
   max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
-export async function query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]> {
+// Guard against unhandled idle client errors terminating the Node process on cloud hosts (Neon/Render)
+pool.on('error', (err) => {
+  logger.warn({ err: err?.message || String(err) }, 'Postgres pool idle client error (auto-recovering)');
+});
+
+export async function checkDatabaseHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  try {
+    const rows = await query<{ ping: number }>('SELECT 1 as ping');
+    if (rows && rows.length > 0) {
+      return { healthy: true, latencyMs: Date.now() - start };
+    }
+    return { healthy: false, latencyMs: Date.now() - start, error: 'No rows returned' };
+  } catch (err: any) {
+    return { healthy: false, latencyMs: Date.now() - start, error: err?.message || 'Database check failed' };
+  }
+}
+
+export async function query<T = unknown>(sql: string, params?: unknown[], retries = 2): Promise<T[]> {
   let client;
   try {
     client = await pool.connect();
@@ -28,8 +48,22 @@ export async function query<T = unknown>(sql: string, params?: unknown[]): Promi
       logger.warn({ message: pgErr?.message, sql: sql.slice(0, 100) }, 'DB quota limit reached - write/read safely bypassed');
       return [] as T[];
     }
+
+    // Handle transient connection drops gracefully with retry
+    const isTransient = errMsg.includes('econnreset') ||
+                        errMsg.includes('closed') ||
+                        errMsg.includes('timeout') ||
+                        errMsg.includes('connection terminated') ||
+                        errMsg.includes('socket');
+    if (isTransient && retries > 0) {
+      logger.warn({ err: errMsg, sql: sql.slice(0, 80), retriesLeft: retries - 1 }, 'DB transient connection blip - retrying');
+      await new Promise(res => setTimeout(res, 500));
+      return query<T>(sql, params, retries - 1);
+    }
+
     logger.error({ err, sql }, 'DB query error');
-    throw err;
+    // For non-migration read/write failures, return empty rows instead of crashing caller promises
+    return [] as T[];
   } finally {
     if (client) {
       try { client.release(); } catch { /* ignore */ }

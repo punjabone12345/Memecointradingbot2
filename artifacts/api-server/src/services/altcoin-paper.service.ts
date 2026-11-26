@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getSettings, getBalance, adjustBalance, setBalance } from './settings.service.js';
-import { query } from '../lib/db.js';
+import { query, checkDatabaseHealth } from '../lib/db.js';
 import {
   Settings,
   PaperPortfolio,
@@ -75,6 +75,24 @@ function readPositionsFromDisk(): { open: PaperPosition[]; closed: ClosedPaperPo
     logger.warn({ err }, 'Could not read positions from disk backup');
   }
   return null;
+}
+
+let lastDbHealthCheck = 0;
+let cachedDbHealth: 'HEALTHY' | 'DEGRADED' = 'HEALTHY';
+
+async function getLiveDbStatus(): Promise<'HEALTHY' | 'DEGRADED'> {
+  const now = Date.now();
+  if (now - lastDbHealthCheck < 30_000) {
+    return cachedDbHealth;
+  }
+  lastDbHealthCheck = now;
+  try {
+    const res = await checkDatabaseHealth();
+    cachedDbHealth = res.healthy ? 'HEALTHY' : 'DEGRADED';
+  } catch {
+    cachedDbHealth = 'DEGRADED';
+  }
+  return cachedDbHealth;
 }
 
 // ── Database Sync: Load persisted positions on server boot ────────────────────
@@ -384,10 +402,11 @@ export async function processPaperTradingEngine(inputSignals: AltcoinSignal[] = 
 
   const portfolio = await getPaperPortfolio();
   const topOpportunities = [...signals].sort((a, b) => b.aiScore - a.aiScore).slice(0, 5);
+  const liveDbStatus = await getLiveDbStatus();
 
   const health: SystemHealth = {
     marketDataStatus: 'CONNECTED',
-    databaseStatus: 'HEALTHY',
+    databaseStatus: liveDbStatus as any,
     scannerStatus: 'RUNNING',
     paperEngineStatus: 'RUNNING',
     learningEngineStatus: 'RUNNING',
@@ -773,6 +792,46 @@ export async function resetPaperPortfolio(initialBalanceUsd = 1000): Promise<Pap
   savePositionsToDisk();
   logger.info({ initialBalanceUsd }, 'Paper portfolio reset to clean $1000 balance, all positions cleared');
   return getPaperPortfolio();
+}
+
+export async function getDatabaseDiagnostics(): Promise<{
+  healthy: boolean;
+  latencyMs: number;
+  dbOpenCount: number;
+  dbClosedCount: number;
+  memoryOpenCount: number;
+  memoryClosedCount: number;
+  diskBackupExists: boolean;
+  error?: string;
+}> {
+  await ensurePositionsLoadedFromDb();
+  const dbHealth = await checkDatabaseHealth();
+  let dbOpenCount = 0;
+  let dbClosedCount = 0;
+  try {
+    const counts = await query<{ status: string; count: string }>(
+      'SELECT status, COUNT(*)::text as count FROM paper_positions GROUP BY status'
+    );
+    for (const c of counts) {
+      if (c.status === 'OPEN') dbOpenCount = parseInt(c.count, 10);
+      else dbClosedCount += parseInt(c.count, 10);
+    }
+  } catch {
+    // fallback
+  }
+
+  const diskData = readPositionsFromDisk();
+
+  return {
+    healthy: dbHealth.healthy,
+    latencyMs: dbHealth.latencyMs,
+    dbOpenCount,
+    dbClosedCount,
+    memoryOpenCount: openPositions.length,
+    memoryClosedCount: closedPositions.length,
+    diskBackupExists: !!diskData,
+    error: dbHealth.error
+  };
 }
 
 

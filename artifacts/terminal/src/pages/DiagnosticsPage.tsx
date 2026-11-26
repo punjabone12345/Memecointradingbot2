@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { AltcoinStatusResponse } from '../lib/types.js';
+import { api } from '../lib/api.js';
 
 interface Props {
   status?: AltcoinStatusResponse | null;
@@ -7,6 +9,39 @@ interface Props {
 export default function DiagnosticsPage({ status }: Props) {
   const health = status?.health;
   const learning = status?.learning;
+
+  const [dbDiag, setDbDiag] = useState<{
+    healthy: boolean;
+    latencyMs: number;
+    dbOpenCount: number;
+    dbClosedCount: number;
+    memoryOpenCount: number;
+    memoryClosedCount: number;
+    diskBackupExists: boolean;
+    error?: string;
+  } | null>(null);
+  const [dbLoading, setDbLoading] = useState(false);
+
+  const testDb = async () => {
+    setDbLoading(true);
+    try {
+      const res = await api.getDbCheck();
+      setDbDiag(res);
+    } catch (err: any) {
+      setDbDiag({
+        healthy: false,
+        latencyMs: 0,
+        dbOpenCount: 0,
+        dbClosedCount: 0,
+        memoryOpenCount: 0,
+        memoryClosedCount: 0,
+        diskBackupExists: false,
+        error: err?.message || 'Database test failed'
+      });
+    } finally {
+      setDbLoading(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1200, margin: '0 auto' }}>
@@ -49,6 +84,59 @@ export default function DiagnosticsPage({ status }: Props) {
             </div>
             <div style={{ fontSize: 9, color: '#7090b0', marginTop: 4 }}>Risk Sizing & Order Execution</div>
           </div>
+        </div>
+
+        {/* Live Database Deep Ping & Persistence Audit */}
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: '#a0b0c0' }}>POSTGRESQL & PERSISTENCE DEEP AUDIT</span>
+            <button
+              onClick={testDb}
+              disabled={dbLoading}
+              style={{
+                background: 'rgba(0,212,255,0.15)',
+                border: '1px solid rgba(0,212,255,0.4)',
+                color: '#00d4ff',
+                padding: '4px 10px',
+                borderRadius: 6,
+                fontSize: 10,
+                fontWeight: 800,
+                cursor: dbLoading ? 'wait' : 'pointer'
+              }}
+            >
+              {dbLoading ? 'PINGING DB...' : 'TEST DB CONNECTION'}
+            </button>
+          </div>
+
+          {dbDiag && (
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: 10, borderRadius: 8, fontSize: 10, color: '#8899aa', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+              <div>
+                <span style={{ color: '#556677' }}>STATUS: </span>
+                <span style={{ color: dbDiag.healthy ? '#00ff88' : '#ff4466', fontWeight: 900 }}>
+                  {dbDiag.healthy ? 'CONNECTED' : 'ERROR'}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#556677' }}>LATENCY: </span>
+                <span style={{ color: '#00d4ff', fontWeight: 800 }}>{dbDiag.latencyMs}ms</span>
+              </div>
+              <div>
+                <span style={{ color: '#556677' }}>DB TRADES: </span>
+                <span style={{ color: '#ffffff', fontWeight: 800 }}>{dbDiag.dbClosedCount} closed, {dbDiag.dbOpenCount} open</span>
+              </div>
+              <div>
+                <span style={{ color: '#556677' }}>DISK BACKUP: </span>
+                <span style={{ color: dbDiag.diskBackupExists ? '#00ff88' : '#ffaa00', fontWeight: 800 }}>
+                  {dbDiag.diskBackupExists ? 'SYNCED' : 'INITIALIZING'}
+                </span>
+              </div>
+              {dbDiag.error && (
+                <div style={{ gridColumn: '1 / -1', color: '#ff4466' }}>
+                  Error: {dbDiag.error}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
