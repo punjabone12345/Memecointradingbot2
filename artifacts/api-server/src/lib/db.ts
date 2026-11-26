@@ -18,14 +18,20 @@ pool.on('error', (err) => {
 
 export async function checkDatabaseHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
   const start = Date.now();
+  let client;
   try {
-    const rows = await query<{ ping: number }>('SELECT 1 as ping');
-    if (rows && rows.length > 0) {
+    client = await pool.connect();
+    const result = await client.query('SELECT 1 as ping');
+    if (result.rows && result.rows.length > 0) {
       return { healthy: true, latencyMs: Date.now() - start };
     }
-    return { healthy: false, latencyMs: Date.now() - start, error: 'No rows returned' };
+    return { healthy: false, latencyMs: Date.now() - start, error: 'No rows returned from ping' };
   } catch (err: any) {
-    return { healthy: false, latencyMs: Date.now() - start, error: err?.message || 'Database check failed' };
+    return { healthy: false, latencyMs: Date.now() - start, error: err?.message || String(err) };
+  } finally {
+    if (client) {
+      try { client.release(); } catch { /* ignore */ }
+    }
   }
 }
 
